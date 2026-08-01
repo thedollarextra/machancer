@@ -1,0 +1,14 @@
+# Build products
+.build/
+MouseEnhancer.app/
+*.dSYM/
+
+# macOS / iCloud detritus
+.DS_Store
+._*
+*\ 2.swift
+*\ [0-9].swift
+.icloud
+
+# Local scratch
+*.log
