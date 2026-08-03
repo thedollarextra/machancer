@@ -12,3 +12,6 @@ MacHancer.app/
 
 # Local scratch
 *.log
+
+# Claude Code machine-local settings (settings.json is the shared one)
+.claude/settings.local.json
