@@ -1,14 +1,17 @@
 #!/bin/bash
-# Builds MouseEnhancer.app from the Swift package.
-#   ./build.sh                    release build -> ./MouseEnhancer.app
+# Builds MacHancer.app from the Swift package.
+#   ./build.sh                    release build -> ./MacHancer.app
 #   ./build.sh debug              debug build
 #   ./build.sh --create-identity  create the stable signing certificate, once
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-APP="MouseEnhancer.app"
-IDENTITY_NAME="${MOUSE_ENHANCER_IDENTITY:-Mouse Enhancer Dev}"
+APP="MacHancer.app"
+IDENTITY_NAME="${MACHANCER_IDENTITY:-MacHancer Dev}"
+# The certificate predates the rename; keep using it rather than forcing a new
+# one, since a changed signing identity means re-granting Accessibility again.
+LEGACY_IDENTITY="Mouse Enhancer Dev"
 
 # Creates a self-signed code-signing certificate in the login keychain.
 #
@@ -88,12 +91,12 @@ CONFIG="${1:-release}"
 # SwiftPM keep its ~300 MB of intermediates in ./.build there makes every compile
 # fight the sync daemon for each object file — measured at over ten minutes for a
 # full rebuild, versus about 50 seconds to local disk. Override with SCRATCH_PATH.
-SCRATCH="${SCRATCH_PATH:-${TMPDIR:-/tmp}/MouseEnhancer-build}"
+SCRATCH="${SCRATCH_PATH:-${TMPDIR:-/tmp}/MacHancer-build}"
 
 echo "==> Compiling ($CONFIG) in $SCRATCH…"
 swift build -c "$CONFIG" --disable-sandbox --scratch-path "$SCRATCH"
 
-BIN="$(swift build -c "$CONFIG" --scratch-path "$SCRATCH" --show-bin-path)/MouseEnhancer"
+BIN="$(swift build -c "$CONFIG" --scratch-path "$SCRATCH" --show-bin-path)/MacHancer"
 
 # Assemble and sign on local disk, never in place.
 #
@@ -109,7 +112,7 @@ STAGE="$SCRATCH/stage/$APP"
 echo "==> Assembling $APP…"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
-cp "$BIN" "$STAGE/Contents/MacOS/MouseEnhancer"
+cp "$BIN" "$STAGE/Contents/MacOS/MacHancer"
 cp Resources/Info.plist "$STAGE/Contents/Info.plist"
 
 # Stamp the build number from the git commit count, so the version shown in the About
@@ -139,6 +142,8 @@ xattr -cr "$STAGE"
 # ./build.sh --create-identity.
 if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$IDENTITY_NAME"; then
   IDENTITY="$IDENTITY_NAME"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -qF "$LEGACY_IDENTITY"; then
+  IDENTITY="$LEGACY_IDENTITY"
   echo "==> Signing as '$IDENTITY'…"
 else
   IDENTITY="-"
@@ -170,7 +175,7 @@ if [ "$IDENTITY" = "-" ]; then
     existing Accessibility grant will NOT apply to it. Bindings will do nothing until it
     is re-granted, and the checkbox in System Settings will keep claiming otherwise.
 
-    Fix this build:      open MouseEnhancer.app, then Settings -> General ->
+    Fix this build:      open MacHancer.app, then Settings -> General ->
                          "Repair Permission…"
 
     Fix it permanently:  ./build.sh --create-identity && ./build.sh

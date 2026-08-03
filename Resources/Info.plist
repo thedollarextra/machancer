@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Mouse Enhancer</string>
+    <string>MacHancer</string>
     <key>CFBundleDisplayName</key>
-    <string>Mouse Enhancer</string>
+    <string>MacHancer</string>
     <key>CFBundleExecutable</key>
-    <string>MouseEnhancer</string>
+    <string>MacHancer</string>
     <key>CFBundleIdentifier</key>
-    <string>com.mouseenhancer.MouseEnhancer</string>
+    <string>com.machancer.MacHancer</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>

@@ -1,4 +1,4 @@
-# Mouse Enhancer
+# MacHancer
 
 A macOS menu-bar agent that rebinds extra mouse buttons, keyboard keys and gestures via a
 global `CGEventTap`, configured from a SwiftUI settings window. Changes apply live — the
@@ -10,7 +10,7 @@ Built and verified on macOS 26.5. Deployment target is macOS 14.
 ## Build
 
 ```bash
-./build.sh                    # release -> ./MouseEnhancer.app
+./build.sh                    # release -> ./MacHancer.app
 ./build.sh debug              # debug build
 ./build.sh --create-identity  # one-time: stable signing certificate
 ```
@@ -62,11 +62,49 @@ Launchpad, space left/right, close/minimize/quit under the cursor, play-pause,
 next/previous track, volume, screenshots, **custom keystroke**, **launch application**,
 **run Shortcut**, and **macros** (keystrokes, clicks, actions and delays in sequence).
 
-**Native mouse button** is the "leave it alone" action, and the default for buttons 4 and
-5. macOS already maps them to back/forward, and apps that read them directly keep working
-— a `⌘[` translation only ever reproduced a subset. When it's the only rule on a button the
+**Native mouse button** is the "leave it alone" action: apps that read the button directly
+keep working, and the event they see is a real one. When it's the only rule on a button the
 press isn't suppressed at all; it's re-posted synthetically only when a hold, drag,
 double-click or chord on the same button forces the press to be claimed.
+
+A press that is claimed but turns out to be a plain click is **always** put back, whether or
+not a click rule exists. Bind only a hold to a button and its click still works. This was
+not always true, and the failure was invisible: the press was suppressed at mouse-down to
+find out whether a hold or drag was coming, and when the answer was "neither" there was
+nothing left to deliver. The only cure was to know that a redundant-looking
+`Click → Native Mouse Button` row was what handed it back.
+
+> **Buttons 4 and 5 are not back/forward.** macOS has no system-wide mapping for them, and
+> **Safari ignores them entirely** — it treats any unrecognised extra button the way it
+> treats a middle click, which is why clicking one over an image opens it in a new tab.
+> Chromium browsers work only because Chromium implements it itself. If you want
+> back/forward everywhere, bind **Navigate Back / Navigate Forward** (`⌘[` / `⌘]`) rather
+> than leaving the button native — "leave it alone" preserves a behaviour Safari never had.
+
+### Out of the box
+
+| Input | Action | Scope |
+|---|---|---|
+| Button 4 · Click | Navigate Back (`⌘[`) | Safari only |
+| Button 5 · Click | Navigate Forward (`⌘]`) | Safari only |
+| Button 5 · Press & Hold | App Exposé | |
+| Button 5 · Drag Up | Mission Control | |
+| Button 5 · Drag Down | App Exposé | |
+| Button 5 · Drag Left | Space Right | |
+| Button 5 · Drag Right | Space Left | |
+| ⌃⌥⌘ + Middle Click | Close Window under Cursor | |
+
+The gestures all hang off Button 5. Button 4 carries nothing but its scoped click, so
+outside Safari its press is never suppressed at all — apps that read the button directly
+see a genuine event, not a replayed one.
+
+The two navigation rules are **scoped to Safari deliberately**, not globally, for the reason
+in the note above: Safari is the one browser where those buttons are otherwise unreachable,
+Chromium browsers already handle them natively, and `⌘[` means "outdent" in enough editors
+that a global rule would take that with it.
+
+The drags are crossed on purpose: dragging left pushes the current space out to the left,
+bringing the one on the right into view. Same convention as natural scrolling.
 
 ### Scope
 
@@ -123,6 +161,139 @@ refuses to commit however they are fed, so the gesture is tracked for its thresh
 App Exposé invoked on release. **Gestures → Machine-Specific** has a toggle to try the live
 transition instead, since whether that works is a property of the machine.
 
+## Tiling
+
+Eleven actions under **Tiling** drive macOS's own window tiling: the four halves, the four
+quarters, Fill, Center, Return to Previous Size, and one combined **Restore, or Minimize**.
+
+They act on the **window under the cursor**, not on whatever is frontmost. That isn't a
+nicety — a tiling action normally rides a drag or a hold, and *that press was suppressed*
+to recognise the gesture, so the window under the cursor never got raised the way an
+ordinary click would have raised it. It is raised and its app activated first, then the
+menu is read from that app's menu bar.
+
+**Restore, or Minimize** asks macOS rather than measuring anything: Return to Previous Size
+is greyed out for an ordinary window and live for a tiled or zoomed one, so that flag *is*
+the answer. Comparing the frame against the screen would have to guess at margins, menu bar,
+Dock and multi-display layout, and would still disagree with macOS at the edges.
+
+### Why the menu and not the shortcut
+
+Every published summary of macOS tiling says these are keyboard shortcuts. Reading a real
+menu with `AXMenuItem` says otherwise, and two things came out of it:
+
+- **Fill and Center are not in Move & Resize.** They sit directly in the Window menu, one
+  level up. Move & Resize holds the eight positions, the Arrange family, and the restore.
+- **Only Center reports a key equivalent at all.** Fill, all four halves and all four
+  quarters report none. A keystroke implementation would have covered one position in
+  eleven.
+
+So the menu item is pressed directly. It also survives the user turning the tiling shortcuts
+off, and — the part that matters for honest feedback — a press reports whether it worked,
+where a posted keystroke only reports that the event left the building.
+
+Setting the window's frame directly was the other option and is rejected on purpose: it
+produces a window that merely happens to be half-screen-sized, with no tiling group, no
+margins setting, and nothing for Return to Previous Size to undo.
+
+One localized string is depended on: `"Move & Resize"`. The Window menu is deliberately not
+matched by name — the menu *containing* a Move & Resize item is the Window menu, whatever it
+calls itself, which halves the exposure. On a non-English system the walk fails and falls
+back to the documented shortcuts, which covers the halves and little else.
+
+Not implemented: the **Arrange** family (Left & Right, Top & Quarters, and six more). Those
+tile two windows and prompt for the second, which is a poor fit for a mouse button.
+
+### Snapping by direction
+
+There is no special trigger for this. Bind the drag directions on one button:
+
+| Input | Action |
+|---|---|
+| Button N · Drag Left | Tile Left |
+| Button N · Drag Right | Tile Right |
+| Button N · Drag Up | Fill Screen |
+| Button N · Drag Down | Restore, or Minimize |
+
+Hold the button over a window, flick a direction, and it snaps. Each direction is an
+independent binding, so any of the eleven positions can go on any of the four.
+
+**Hold & Swipe** is deliberately not the mechanism here: it streams a live gesture whose
+whole point is tracking your movement continuously, and macOS tiling is discrete — there is
+no half-tiled state to track toward.
+
+## Scrolling
+
+**Smooth scrolling** (on by default, **Scrolling** tab) replaces a wheel notch with the
+stream a trackpad produces. A notch is one event carrying a whole line of travel, and that
+is exactly what it looks like: the page jumps. The notch is swallowed and the same distance
+paid out over a fifth of a second as pixel-unit events shaped like a trackpad's.
+
+Three things make it read as a trackpad rather than as a fast wheel:
+
+- **Continuous pixel deltas.** `kCGScrollWheelEventIsContinuous`, plus point, fixed-point
+  and line deltas together — apps read whichever one they were written against.
+- **Gesture phases** (began / changed / ended). This is what unlocks rubber-band overscroll
+  and WebKit's smoother compositor path, and it is the reason Safari specifically stops
+  lurching. Phases are sent **vertically only**: horizontally they read as a two-finger
+  swipe and navigate back instead of scrolling. ⇧+wheel is excluded for the same reason,
+  since AppKit swaps the axis after we post.
+- **An exponential approach, not a fixed-duration curve.** Each frame delivers a fraction
+  of what is still owed. That gives the fast start and long tail of a real flick, and — the
+  actual reason it was chosen — a notch landing mid-animation just adds to the outstanding
+  distance. There is no animation to restart, retarget or cross-fade.
+
+A wheel is identified by Mos's discriminator rather than by `IsContinuous` alone: continuous
+input also stamps a `ScrollPhase`, a `MomentumPhase` or a `ScrollCount`, and a wheel stamps
+none of the four. The extra reach matters for third-party drivers — Logitech Options,
+SteerMouse — which smooth the wheel themselves and emit phased events that `IsContinuous`
+would not catch, so they'd be smoothed a second time.
+
+Left alone entirely: trackpads and Magic Mice (already continuous — smoothing something
+smooth only adds latency), and ⌘/⌃+wheel, which are zoom and count discrete steps.
+
+### Coasting
+
+A real gesture is two streams, not one. While the finger is down, `phase` runs
+began → changed → ended with `momentumPhase` at none; once the finger lifts and the device
+coasts, `momentumPhase` runs began → changed → ended with `phase` at none. Notches arriving
+are the finger; 100 ms of quiet hands the remaining travel over as the coast. A notch during
+the coast ends the momentum and begins a fresh gesture — a hand landing on a trackpad
+mid-glide — carrying the outstanding travel with it, since reaching for more scroll is not a
+request to start from a standstill.
+
+The distance is identical either way. What changes is what the app is told the movement
+*is*, which is what decides how it snaps, paginates and rubber-bands at the end. Both fields
+are always written, never left at whatever the constructor produced: an event carrying a
+value in both is one no device ever emits.
+
+**Coast after the wheel stops** turns it off, for the few apps that discard momentum events
+outright and would otherwise appear to lose the last part of a scroll.
+
+Two things that caused a delayed lurch after the scroll appeared to stop, both fixed:
+
+- **Re-injection level.** Synthesized scrolls go to `.cgSessionEventTap`, the level they
+  were intercepted at — never `.cghidEventTap`. The HID point sits upstream of the window
+  server's scroll acceleration, which is driven by line delta and event rate and keeps its
+  own accumulator. Handing it 120 events a second gives back an amplified stream with a
+  tail of its own.
+- **App Nap.** This is an `LSUIElement` agent with no window — precisely App Nap's target.
+  It suspends and coalesces timers, and a coalesced animation frame still measures real
+  elapsed time, so the deferred distance arrives all at once when the timer is released.
+  A run holds a `beginActivity(.latencyCritical)` for its duration and no longer.
+
+`momentumPhase` is explicitly zeroed. A real gesture sets one phase or the other, never
+both: the user-driven half runs `phase` began→changed→ended with `momentumPhase` at none,
+and only when the *device* takes over does `momentumPhase` run while `phase` reads none. We
+are always the user-driven half, and this animation already coasts — a consumer reading a
+stray momentum value would coast on top of it.
+
+`Distance per step`, `Smoothness` and `Acceleration` tune the feel; acceleration lengthens a
+notch when notches arrive quickly, which is the one thing a wheel does better than a
+trackpad. Gesture phases can be turned off for an app that reads them as a swipe, and the
+whole feature has its own app scope — separate from the app-wide one, because an app that
+wants its raw wheel back is rarely one you want every binding disabled in.
+
 ## Dock
 
 Middle-clicking a Dock tile runs a per-app action, configured on the **Dock** tab, which
@@ -143,7 +314,9 @@ the callback only does a rectangle test.
 
 ## Safety
 
-- **On-screen feedback** (default on) — a brief HUD naming what fired.
+- **On-screen feedback** (default **off**) — a brief HUD naming what fired. It's a
+  confirmation aid for a setup you don't trust yet; once you do, a banner on every click is
+  noise about actions you just asked for and can see happen.
 - **Ignore the empty desktop** (default on) — a stray click on bare desktop won't reach
   through to whatever is behind it.
 - **Per-binding confirmation** — Close Window and Quit App each offer a Confirm checkbox.
@@ -158,7 +331,7 @@ install an unusable hold delay.
 
 ## Layout
 
-All behaviour lives in `MouseEnhancerCore` so it can be tested; `Sources/MouseEnhancer/main.swift`
+All behaviour lives in `MacHancerCore` so it can be tested; `Sources/MacHancer/main.swift`
 is a nine-line shim.
 
 | File | Role |
@@ -176,8 +349,10 @@ is a nine-line shim.
 | `AccessibilityBridge.swift` | Crash-safe wrappers over the `AXUIElement` C API |
 | `DockProbe.swift` | Cached "is this point on the Dock?" |
 | `UserPreferences.swift` | Storage plus the hot-path lookup index |
+| `Services/SmoothScroller.swift` | Wheel notch → trackpad-shaped pixel stream |
+| `Services/SpaceMonitor.swift` | When macOS actually finished changing space |
 | `Services/` | Dock swipe driver, login item, HUD, event log, permission repair |
-| `UI/` | Binding row, recorders, scope editor, Dock tab, diagnostics |
+| `UI/` | Binding row, recorders, scope editor, Dock tab |
 
 The split between `GestureEngine` and `EventTapManager` is what makes the state machine
 testable: the engine takes a plain `MouseInput` and *emits* action requests rather than
@@ -186,27 +361,51 @@ performing them.
 ## Tests
 
 ```bash
-swift run MouseEnhancerChecks    # 35 checks, no Xcode needed
+swift run MacHancerChecks    # 105 checks, no Xcode needed
 ```
 
 Covers pass-through and suppression, per-binding timing overrides, swipe direction and
-saturation, Dock action defaults and persistence, shadowed-binding detection, and
-settings round-trips including clamping of hostile values. Timing is injected, so nothing
-sleeps.
+saturation, the smooth-scroll curve (delivers exactly the distance owed, settles by its
+deadline, cancels on reversal, survives a stalled frame), Dock action defaults and
+persistence, shadowed-binding detection, the shipped defaults, and settings round-trips
+including clamping of hostile values. Timing is injected, so nothing sleeps.
 
 There is also an XCTest suite in `Tests/`, but **XCTest ships with Xcode** — on a machine
-with only the Command Line Tools it cannot run at all. `MouseEnhancerChecks` exists so the
+with only the Command Line Tools it cannot run at all. `MacHancerChecks` exists so the
 repository doesn't imply coverage it can't deliver.
 
 What tests cannot cover is the Accessibility layer, which needs a trusted, bundled process.
-That's what the **Debug** tab is for: trust, whether the tap is actually installed,
-positional hit-testing, Dock tile readability, and competing event taps, checked from
-inside the running app. Start with **"Event tap installed"** — trust reading as granted is
-not sufficient, and that combination is exactly how a completely inert app looks healthy.
+The in-app Diagnostics tab and Button Tester that used to fill that gap were removed to keep
+the agent small; the file log replaces them and is strictly more useful, since it records the
+decision for every press without needing a window open over the app being diagnosed:
 
-The **Button Tester** on the same tab sits ahead of the engine, so it sees buttons no
-binding claims, and reports the raw `CGEvent` number — "Button 4" is button number 3, which
-is the kind of off-by-one that makes a binding look broken.
+```bash
+defaults write com.machancer.MacHancer debugLog -bool YES
+```
+
+Turn it on under **General → Diagnostics**, which also reveals the file in Finder. It takes
+effect immediately — no relaunch — because the settings window is a separate process and
+the agent re-reads on the change notification.
+
+Keyboard keys ride the same engine as mouse buttons, so **every keystroke on the system
+reaches the logger**. Key names are therefore withheld by default and log as `⌨ key`,
+leaving the modifiers and the engine's decision, which is what diagnosing a binding
+actually needs.
+
+**"Include key names" is a grant, not a switch.** It is stamped with an expiry an hour out
+and lapses on its own, whether or not anyone goes back to turn it off — the risk was never
+the hour, it was forgetting. The toggle counts down while it is live, an elapsed grant reads
+as off with no action taken, and turning the log off revokes any grant with it. A
+hand-edited expiry that is negative or infinite is rejected rather than honoured.
+
+The older `debugLogKeys` boolean is deliberately not migrated: it had no expiry, so anyone
+who set it once is still exposed by it, and lapsing back to redaction is the safe direction
+to fail.
+
+Relaunch, and `~/Library/Logs/MacHancer.log` gets a line per event — `claimed`, `passed`,
+`click -> ...`, the synthetic replays, and whether each was suppressed. This is what
+identified a swallowed click that three passes of reading the code had missed. Note that
+what the UI calls "Button 4" is button number 3.
 
 ## Performance
 
@@ -223,18 +422,53 @@ Measured with a 1.1M-event harness (50k drag gestures of 22 events each):
   one `Int`, rebuilt only when bindings change, and merged per frontmost app with the
   result cached — the app changes a few times a minute, events arrive hundreds of times a
   second.
-- **Log messages are `@autoclosure`**, so recording off costs one boolean.
+- **Log messages are `@autoclosure`**, so logging off costs one boolean.
 - **The Dock check rejects geometrically first**, instead of ~80 AX round trips on every
   middle click.
 - **Dock icons are loaded once**, not rebuilt per SwiftUI redraw.
+- **The code signature is read once.** Every property on `CodeSignature` used to call
+  `SecCodeCopySigningInformation` fresh, and the settings window asked for the hash once a
+  second. A process cannot change its own signature.
 
-Idle: **13 MB**, 0.0% CPU, 4 threads. Around 33 MB with the settings window open — SwiftUI
-is the cost, it loads lazily on first open, and the window is released on close. No timer
-runs while idle except a 5-second permission health check.
+### Measured
 
-Threading: the tap callback only decides and returns. Actions run on a serial background
-queue — not the main thread, because an unresponsive target app can block an Accessibility
-call for hundreds of milliseconds and would otherwise freeze the settings window.
+| State | Agent | Settings process |
+|---|---|---|
+| Idle, settings never opened | **14 MB**, 0.0% CPU | — |
+| Settings window open | 19 MB | 37 MB |
+| After closing | **19 MB**, flat over repeated cycles | gone |
+
+No timer runs while idle except a five-second permission health check, and the
+smooth-scroll timer exists only while a scroll is animating.
+
+### The settings window is its own process
+
+Building that UI costs about 21 MB that never comes back. Repeated open/close cycles
+plateau, so there is no leak, but the memory is not returned either:
+`malloc_zone_pressure_relief` was tried and measured to reclaim none of it, because of the
+~26 MB held after closing only about 2 MB reads as reclaimable. The rest is live
+allocations SwiftUI and CoreAutoLayout still reference, and there is no API to purge those.
+The only thing that returns them is process exit.
+
+So `--settings` re-executes **this same binary** as a second process, and closing the window
+terminates it. Re-executing rather than shipping a helper binary is what makes it cheap:
+
+- **Same code signature.** TCC keys an Accessibility grant to the code requirement, so a
+  separate helper would have its own trust state and `AXIsProcessTrusted` in the settings
+  window would answer about the wrong process. One cdhash means the trust banner is simply
+  correct, with no IPC carrying agent state across.
+- **Same bundle.** One preferences domain, and `SMAppService.mainApp` still refers to the
+  app rather than to a helper, so launch-at-login keeps working.
+
+It is spawned with `Process`, not `NSWorkspace.openApplication` — LaunchServices sees the
+bundle identifier already running and would activate the agent instead of starting anything.
+
+That leaves one thing to arrange: the agent holds every preference in memory so the tap
+never touches `UserDefaults`, so a write in the other process is invisible to it.
+`PreferenceBridge` posts a Darwin notification on every write and the agent re-reads,
+coalesced so that dragging a slider costs one reload rather than one per frame. Every write
+broadcasts, including the agent's own, because a missed broadcast would show up as settings
+that mysteriously don't apply until relaunch — and the wasted re-read costs nothing.
 
 ## Signing
 
@@ -278,13 +512,21 @@ These are behavioural fixes, not restyling.
     makes the window server ignore real input for 0.25s — disastrous when the events are
     driven by a drag still in progress.
 12. **Launchpad no longer exists** in macOS 26; the action opens the Apps view instead.
-13. **Buttons 4 and 5 default to themselves**, not to `⌘[` / `⌘]`.
+13. **Buttons 4 and 5 default to themselves**, not to `⌘[` / `⌘]`. Button 4 goes further and
+    carries no rule at all, which keeps it out of the engine entirely.
+14. **Smooth scrolling sends gesture phases only vertically.** A phased horizontal scroll is
+    what Safari reads as a two-finger back/forward swipe, so a tilt wheel would navigate
+    instead of scrolling sideways.
 
 ## Known gaps
 
-- **Space switching is queued, not instant.** macOS drops a switch that arrives
-  mid-animation, so repeats are spaced out to land instead of vanishing. Turning on Reduce
-  Motion is the only thing that shortens the animation itself.
+- **Space switching is queued, not instant.** macOS silently drops a switch that arrives
+  mid-animation. A repeat now waits for `NSWorkspace.activeSpaceDidChangeNotification` to
+  confirm the previous switch actually landed, then for `Repeat spacing` on top — a settle
+  time after a known event, rather than a guess measured from our own post, which was why a
+  swipe during the animation used to do nothing at all. Confirmation is waited on at most
+  once per switch, so reaching the end of the row costs one timeout and not one per gesture
+  thereafter. Turning on Reduce Motion is still the only thing that shortens the animation.
 - **App Exposé is binary, not continuous**, for the reason described under Swipes.
 - **Leftward swipes don't cycle apps inside Exposé.** They work for spaces; the in-Exposé
   case remains unexplained.

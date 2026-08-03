@@ -9,9 +9,9 @@ the app icon and the status icon can't drift apart.
 
 ```bash
 swiftc -O Tools/generate-icon.swift -o /tmp/icongen
-rm -rf /tmp/MouseEnhancer.iconset && mkdir -p /tmp/MouseEnhancer.iconset
-/tmp/icongen /tmp/MouseEnhancer.iconset
-iconutil -c icns /tmp/MouseEnhancer.iconset -o Resources/AppIcon.icns
+rm -rf /tmp/MacHancer.iconset && mkdir -p /tmp/MacHancer.iconset
+/tmp/icongen /tmp/MacHancer.iconset
+iconutil -c icns /tmp/MacHancer.iconset -o Resources/AppIcon.icns
 ```
 
 The `.icns` is committed because `build.sh` copies it straight into the bundle; this

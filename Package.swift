@@ -2,28 +2,28 @@
 import PackageDescription
 
 let package = Package(
-    name: "MouseEnhancer",
+    name: "MacHancer",
     platforms: [.macOS(.v14)],
     targets: [
         // All behaviour lives here so it can be unit tested; the executable is a shim.
-        .target(name: "MouseEnhancerCore", path: "Sources/MouseEnhancerCore"),
+        .target(name: "MacHancerCore", path: "Sources/MacHancerCore"),
         .executableTarget(
-            name: "MouseEnhancer",
-            dependencies: ["MouseEnhancerCore"],
-            path: "Sources/MouseEnhancer"
+            name: "MacHancer",
+            dependencies: ["MacHancerCore"],
+            path: "Sources/MacHancer"
         ),
-        // Runs without Xcode: `swift run MouseEnhancerChecks`. The XCTest target below
+        // Runs without Xcode: `swift run MacHancerChecks`. The XCTest target below
         // needs a full Xcode install, which is not a given on a machine that can
         // otherwise build and run this app.
         .executableTarget(
-            name: "MouseEnhancerChecks",
-            dependencies: ["MouseEnhancerCore"],
-            path: "Sources/MouseEnhancerChecks"
+            name: "MacHancerChecks",
+            dependencies: ["MacHancerCore"],
+            path: "Sources/MacHancerChecks"
         ),
         .testTarget(
-            name: "MouseEnhancerCoreTests",
-            dependencies: ["MouseEnhancerCore"],
-            path: "Tests/MouseEnhancerCoreTests"
+            name: "MacHancerCoreTests",
+            dependencies: ["MacHancerCore"],
+            path: "Tests/MacHancerCoreTests"
         ),
     ],
     swiftLanguageVersions: [.v5]
