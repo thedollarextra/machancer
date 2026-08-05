@@ -19,44 +19,82 @@ struct ScrollingTab: View {
                             + "does under two fingers.")
             }
 
-            Section("Feel") {
-                ValueSlider(
-                    title: "Distance per step", value: $prefs.scrollStepPx,
-                    range: 10...400, step: 5, unit: "px", decimals: 0,
-                    help: "How far one notch of the wheel travels."
-                )
-                ValueSlider(
-                    title: "Smoothness", value: $prefs.scrollSmoothingSec,
-                    range: 0.05...0.60, step: 0.01, unit: "s",
-                    help: "How long that distance takes to be paid out. Higher is "
-                        + "smoother and floatier; lower is tighter and more immediate."
-                )
-                ValueSlider(
-                    title: "Acceleration", value: $prefs.scrollAcceleration,
-                    range: 0...1, step: 0.05, decimals: 2,
-                    help: "How much further a notch travels when you spin the wheel "
-                        + "quickly. 0 gives every notch the same distance."
-                )
+            Section("Axes") {
+                Toggle("Invert wheel direction (vertical)", isOn: $prefs.reverseVertical)
+                Toggle("Invert wheel direction (horizontal)", isOn: $prefs.reverseHorizontal)
+                Toggle("Smooth vertical scrolling", isOn: $prefs.smoothVertical)
+                Toggle("Smooth horizontal scrolling", isOn: $prefs.smoothHorizontal)
+                SettingNote("macOS has one natural-scrolling switch and it moves both "
+                            + "axes together, so inverting only one of them is only "
+                            + "reachable here.")
             }
             .disabled(!prefs.smoothScrollEnabled)
 
-            Section("Compatibility") {
-                Toggle("Send trackpad gesture phases", isOn: $prefs.scrollGesturePhases)
-                    .help("Off if an app reacts to scrolling as though it were a swipe.")
-                SettingNote("Phases are what give rubber-band overscroll and the "
-                            + "smoothest path through Safari. They are only ever sent "
-                            + "vertically — horizontally they read as a two-finger "
-                            + "swipe, which navigates back instead of scrolling.")
+            Section("Keys") {
+                ModifierPicker(title: "Dash Key", selection: $prefs.scrollBoostModifier,
+                               help: "Increase scrolling speed on long pages.")
+                ModifierPicker(title: "Toggle Key", selection: $prefs.scrollToggleModifier,
+                               help: "Change vertical scrolling to horizontal scrolling.")
+                ModifierPicker(title: "Block Key", selection: $prefs.scrollDisableModifier,
+                               help: "Temporarily block smooth scrolling.")
+                SettingNote("A modifier claimed here stops being a zoom modifier for the "
+                            + "wheel — ⌘ and ⌃ are otherwise left alone, since both zoom.")
+            }
+            .disabled(!prefs.smoothScrollEnabled)
+
+            Section("Feel") {
+                ValueSlider(
+                    title: "Step", value: $prefs.scrollStepPx,
+                    range: 10...400, step: 0.4, decimals: 2,
+                    help: "Sets the minimum scroll distance."
+                )
+                ValueSlider(
+                    title: "Speed", value: $prefs.scrollSpeed,
+                    range: 0.1...10, step: 0.05, decimals: 2,
+                    help: "Multiplies Step. Distance per notch is Step x Speed."
+                )
+                ValueSlider(
+                    title: "Duration", value: $prefs.scrollSmoothingSec,
+                    range: 0.05...0.60, step: 0.01, unit: "s",
+                    help: "How long that distance takes to be paid out."
+                )
+                ValueSlider(
+                    title: "Dash multiplier", value: $prefs.scrollBoostFactor,
+                    range: 1...10, step: 0.5, unit: "x", decimals: 1,
+                    help: "How much further a notch travels while the Dash Key is held."
+                )
+                ValueSlider(
+                    title: "Auto acceleration", value: $prefs.scrollAcceleration,
+                    range: 0...1, step: 0.05, decimals: 2,
+                    help: "Extra distance when the wheel is spun quickly. Mos has no "
+                        + "equivalent, so 0 matches it."
+                )
+                SettingNote("Step and Speed are Mos's two dials and compose the same way, "
+                            + "so its numbers transfer directly. Duration is in seconds "
+                            + "here rather than Mos's own unit.")
+            }
+            .disabled(!prefs.smoothScrollEnabled)
+
+            Section("Emission") {
+                Picker("Event shape", selection: $prefs.scrollGesturePhases) {
+                    Text("Line events (Mos-style)").tag(false)
+                    Text("Trackpad gestures").tag(true)
+                }
+                .pickerStyle(.radioGroup)
+
+                SettingNote("Line events are what Mos emits — non-continuous, no gesture "
+                            + "phases, smoothness bought purely with volume and rate. "
+                            + "Nothing downstream can mistake a scroll for a swipe or "
+                            + "discard its tail, so it behaves uniformly everywhere.")
+                SettingNote("Trackpad gestures mark the events continuous and wrap them "
+                            + "in began/changed/ended, which is what unlocks rubber-band "
+                            + "overscroll and WebKit's smoothest path in Safari — at the "
+                            + "cost of apps that read a phased horizontal scroll as a "
+                            + "back-swipe, or drop momentum entirely.")
 
                 Toggle("Coast after the wheel stops", isOn: $prefs.scrollMomentum)
                     .disabled(!prefs.scrollGesturePhases)
-                    .help("Labels the tail of a scroll as momentum, the way a trackpad "
-                          + "does once your fingers leave it.")
-                SettingNote("The distance travelled is the same either way; what changes "
-                            + "is what the app is told the movement is, which decides how "
-                            + "it snaps, paginates and rubber-bands at the end. Turn it "
-                            + "off if an app ignores the last part of a scroll — a few "
-                            + "discard momentum outright.")
+                    .help("Momentum is a gesture concept; it needs trackpad mode.")
             }
             .disabled(!prefs.smoothScrollEnabled)
 
@@ -79,5 +117,26 @@ struct ScrollingTab: View {
             get: { prefs.smoothScrollScope },
             set: { prefs.smoothScrollScope = $0 }
         )
+    }
+}
+
+/// One modifier, or none. Mirrors how the rest of the app talks about modifiers while
+/// staying a single-choice control — two modifiers for one hold would be a chord, and
+/// these are meant to be reachable with the hand already on the mouse.
+private struct ModifierPicker: View {
+    let title: String
+    @Binding var selection: ModifierSet
+    var help: String = ""
+
+    private static let options: [(String, ModifierSet)] = [
+        ("None", ModifierSet()), ("⌃ Control", .control), ("⌥ Option", .option),
+        ("⇧ Shift", .shift), ("⌘ Command", .command),
+    ]
+
+    var body: some View {
+        Picker(title, selection: $selection) {
+            ForEach(Self.options, id: \.1.rawValue) { Text($0.0).tag($0.1) }
+        }
+        .help(help)
     }
 }

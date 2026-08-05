@@ -50,10 +50,27 @@ public enum DebugLog {
         return remaining > 0 ? remaining : nil
     }
 
+    /// Logs every scroll event the tap sees, with the fields that characterise it.
+    /// Off unless asked for:
+    ///
+    ///     defaults write com.machancer.MacHancer debugLogScroll -bool YES
+    ///
+    /// This is a measuring instrument, not a diagnostic. It exists to answer what
+    /// *another* app's smoothing actually emits — rate, delta size, curve shape, whether
+    /// it uses gesture phases — by watching the stream rather than guessing from
+    /// behaviour. The same method that read the dock-swipe fields off real trackpad
+    /// hardware instead of inferring them.
+    public private(set) static var recordsScroll = readScrollCapture()
+
+    private static func readScrollCapture() -> Bool {
+        UserDefaults.standard.bool(forKey: "debugLogScroll")
+    }
+
     /// Picks up a change made in the settings process.
     public static func refreshSettings() {
         isEnabled = readEnabled()
         keyNamesUntil = readKeyNamesUntil()
+        recordsScroll = readScrollCapture()
     }
 
     private static func readEnabled() -> Bool {

@@ -28,19 +28,28 @@ public enum WindowTiler {
     private static let maxTopLevelMenus = 32
 
     /// Returns whether the window actually moved, as far as that is knowable.
-    public static func apply(
-        _ tile: WindowTile,
-        in pid: pid_t?,
-        sendKey: (CGKeyCode, ModifierSet) -> Bool
-    ) -> Bool {
-        if let pid, let item = menuItem(tile.menuTitle, at: tile.location, in: pid) {
-            // A disabled item is the honest answer to "tile what?" — no window, or one
-            // that refuses to be resized. Press reports that as failure, which is
-            // exactly what should reach the HUD.
-            return AX.perform(item, kAXPressAction as String)
+    ///
+    /// There is deliberately **no keystroke fallback**. There used to be, and it was
+    /// worse than doing nothing: reading a real menu showed that only Center carries a
+    /// key equivalent at all, so for every other position the fallback posted a shortcut
+    /// nothing handles — which macOS answers with a system beep. For the halves it was
+    /// actively wrong as well, since ⌃← and ⌃→ are the *space switching* shortcuts, so a
+    /// failed tile could throw you to another desktop. A failure here should be silent
+    /// and reported, not audible and destructive.
+    public static func apply(_ tile: WindowTile, in pid: pid_t?) -> Bool {
+        guard let pid else {
+            DebugLog.write("tile \(tile.rawValue): no target app")
+            return false
         }
-        guard let shortcut = tile.shortcut else { return false }
-        return sendKey(shortcut.key, shortcut.modifiers)
+        guard let item = menuItem(tile.menuTitle, at: tile.location, in: pid) else {
+            DebugLog.write("tile \(tile.rawValue): no “\(tile.menuTitle)” item in this app's menu")
+            return false
+        }
+        // A disabled item is the honest answer to "tile what?" — no window, or one that
+        // refuses to be resized. Press reports that as failure.
+        let pressed = AX.perform(item, kAXPressAction as String)
+        DebugLog.write("tile \(tile.rawValue): press \(pressed ? "ok" : "REFUSED")")
+        return pressed
     }
 
     /// Whether this window has a previous size to go back to — i.e. whether it is

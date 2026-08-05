@@ -126,6 +126,16 @@ public struct ActionBinding: Codable, Hashable, Identifiable, Sendable {
     /// Pixels of vertical travel equal to one full swipe.
     public var swipeDistanceY: Double?
 
+    /// Keep working while another button is already dragging something.
+    ///
+    /// Off by default, and per binding rather than global, because it costs the gesture
+    /// its exclusivity: with a window drag in flight the movement belongs to *both*
+    /// gestures at once. That is exactly right for "drag a window to another space" and
+    /// exactly wrong for anything that would fight the drag underneath it.
+    ///
+    /// Optional so bindings saved before this existed still decode.
+    public var duringWindowDrag: Bool?
+
     /// Where this binding applies. `nil` means everywhere.
     ///
     /// A binding scoped to an app overrides an unscoped one on the same input while
@@ -174,7 +184,8 @@ public struct ActionBinding: Codable, Hashable, Identifiable, Sendable {
         swipeDistanceX: Double? = nil,
         swipeDistanceY: Double? = nil,
         scope: AppScope? = nil,
-        appScope: String? = nil
+        appScope: String? = nil,
+        duringWindowDrag: Bool? = nil
     ) {
         self.id = id
         self.button = button
@@ -191,7 +202,11 @@ public struct ActionBinding: Codable, Hashable, Identifiable, Sendable {
         self.swipeDistanceY = swipeDistanceY
         self.scope = scope
         self.appScope = appScope
+        self.duringWindowDrag = duringWindowDrag
     }
+
+    /// True when this rule asked to survive another button's drag.
+    public var survivesWindowDrag: Bool { duringWindowDrag == true }
 
     /// Travel equal to one full swipe on the given axis.
     ///

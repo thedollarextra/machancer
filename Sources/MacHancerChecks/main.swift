@@ -102,6 +102,15 @@ func drag(_ b: Int, _ x: Double, _ y: Double) -> MouseInput {
 }
 func up(_ b: Int) -> MouseInput { MouseInput(phase: .up, button: b, location: .zero) }
 
+enum SmoothScrollerDirectionProbe {
+    static func horizontal(_ p: Double) -> ActionKind? {
+        GestureEngine.measuredSwipeAction(axis: .horizontal, progress: p)
+    }
+    static func vertical(_ p: Double) -> ActionKind? {
+        GestureEngine.measuredSwipeAction(axis: .vertical, progress: p)
+    }
+}
+
 let B4 = MouseButton.button4
 let B5 = MouseButton.button5
 
@@ -245,32 +254,56 @@ do {
 // MARK: - Smooth scrolling
 
 section("smooth scrolling")
+// The reference for all of these is a capture of Mos's live output: 389 events, 44
+// bursts. Signature: a small opening event, deltas that rise, and a dead stop on the
+// largest delta — zero tail in every burst.
 do {
-    // The exponential approach must arrive, and must not overshoot on the way.
-    var pending = 100.0
-    var delivered = 0.0
-    var frames = 0
-    var everOvershot = false
-    while pending != 0, frames < 1000 {
-        let taken = SmoothScroller.step(pending: &pending, dt: 1.0 / 120, settleSec: 0.22)
-        if taken <= 0 || taken > 100 { everOvershot = true }
-        delivered += taken
-        frames += 1
+    // One notch, walked at the 100Hz frame rate with the deadline receding as it would.
+    var pending = 91.0, velocity = 0.0
+    var deltas: [Double] = []
+    var t = 0.0
+    let settle = 0.09
+    while pending != 0, deltas.count < 100 {
+        t += 0.01
+        let taken = SmoothScroller.advance(pending: &pending, velocity: &velocity,
+                                           dt: 0.01, remaining: settle - t, settleSec: settle)
+        deltas.append(taken)
     }
-    check("every step stays within the outstanding travel", !everOvershot)
-    check("every pixel is eventually delivered", abs(delivered - 100) < 0.0001)
-    check("it lands rather than approaching forever", frames < 200)
-
-    // "Settles in `settleSec`" has to mean something measurable.
-    var quick = 100.0
-    for _ in 0..<Int(0.22 * 120) { _ = SmoothScroller.step(pending: &quick, dt: 1.0 / 120, settleSec: 0.22) }
-    check("98% is delivered by the settle time", quick < 2)
+    check("every pixel is delivered", abs(deltas.reduce(0,+) - 91) < 0.0001)
+    check("it finishes by the deadline", deltas.count <= Int(settle / 0.01) + 1)
+    check("the opening event is small, like Mos's 1px kick",
+          deltas.first! < deltas.max()! * 0.4)
+    check("deltas rise to the end — the burst stops at peak, no tail",
+          deltas.max()! == deltas.last!)
+    check("no frame moves backwards", deltas.allSatisfy { $0 >= 0 })
 }
 do {
-    // A frame that arrives late must not dump the whole remaining distance at once.
-    var pending = 100.0
-    let taken = SmoothScroller.step(pending: &pending, dt: 10.0, settleSec: 0.22)
-    check("a huge dt still cannot exceed what is owed", taken <= 100.0001)
+    // A spin faster than the deadline merges bursts: each notch re-arms the deadline
+    // before the previous travel lands, so the output plateaus at the input rate
+    // instead of pulsing per notch. (Slower than the deadline, each notch is its own
+    // crisp eased hop — which is also what Mos does.)
+    var pending = 0.0, velocity = 0.0
+    var lastNotch = 0
+    var steps: [Double] = []
+    for frame in 0..<200 {
+        if frame % 5 == 0 { SmoothScroller.add(91, to: &pending); lastNotch = frame }  // 20 notches/s
+        let remaining = 0.09 - Double(frame - lastNotch) * 0.01
+        let taken = SmoothScroller.advance(pending: &pending, velocity: &velocity,
+                                           dt: 0.01, remaining: remaining, settleSec: 0.09)
+        if frame > 60 { steps.append(taken) }
+    }
+    let mean = steps.reduce(0,+) / Double(steps.count)
+    check("a fast spin merges into one steady glide",
+          (steps.max()! - steps.min()!) / mean < 0.6)
+    check("at roughly the input rate", abs(mean - 91.0 / 5) < 4)
+}
+do {
+    // A stalled frame past the deadline lands everything at once — the hard stop —
+    // and never more than is owed.
+    var pending = 91.0, velocity = 0.0
+    let taken = SmoothScroller.advance(pending: &pending, velocity: &velocity,
+                                       dt: 10.0, remaining: -5, settleSec: 0.09)
+    check("a huge dt still cannot exceed what is owed", taken == 91 && pending == 0)
 }
 do {
     var pending = 0.0
@@ -333,8 +366,9 @@ do {
     prefs.resetToDefaults()
     check("the HUD is off out of the box", prefs.showActionFeedback == false)
     check("smooth scrolling is on out of the box", prefs.smoothScrollEnabled)
-    check("so are gesture phases and the coast",
-          prefs.scrollGesturePhases && prefs.scrollMomentum)
+    // Mos's shape is the default: line events, no gesture phases. Measured off its
+    // live stream, not assumed.
+    check("line events are the default emission shape", prefs.scrollGesturePhases == false)
 
     // Button 4's only rule is Safari-scoped, so everywhere else its press is never
     // suppressed — which is what keeps apps that read the button directly working.
@@ -394,18 +428,12 @@ do {
           tilingKinds.allSatisfy { ActionKind.macroInvocable.contains($0) })
 }
 do {
-    // The menu is the only route to these, which is the reason WindowTiler presses menu
-    // items rather than posting the shortcut. If Apple ever ships keys for them this
-    // check fails, which is the right moment to reconsider that.
-    let keyless = Set(WindowTile.allCases.filter { $0.shortcut == nil }.map(\.rawValue))
-    check("the quarters and restore have no macOS shortcut",
-          keyless == ["topLeft", "topRight", "bottomLeft", "bottomRight", "restore"])
-
-    let halves = [WindowTile.left, .right, .top, .bottom]
-    check("each half maps to its own arrow key",
-          Set(halves.compactMap { $0.shortcut?.key }) == [0x7B, 0x7C, 0x7D, 0x7E])
-    check("and every shortcut carries Control",
-          WindowTile.allCases.compactMap(\.shortcut).allSatisfy { $0.modifiers == .control })
+    // The menu is the only route, and this is why: read off a real menu with
+    // AXMenuItemCmdChar, only Center carries a key equivalent at all. A keystroke
+    // implementation would have covered one position in eleven — and for the halves it
+    // would have collided with space switching and beeped.
+    check("only Center has a system shortcut",
+          WindowTile.allCases.filter(\.hasSystemShortcut) == [.center])
 
     check("every position names a menu item",
           WindowTile.allCases.allSatisfy { !$0.menuTitle.isEmpty })
@@ -555,6 +583,135 @@ do {
     check("existing bindings survive", reopened.bindings.first?.action.kind == .appExpose)
 
     legacy.removePersistentDomain(forName: legacyDomain)
+}
+
+// MARK: - Gestures during someone else's drag
+
+section("surviving a window drag")
+do {
+    // Off unless asked for: the movement belongs to two gestures at once, which is
+    // right for carrying a window to the next space and wrong for most other things.
+    let plain = ActionBinding(button: B5, trigger: .swipe, action: .none)
+    check("off by default", !plain.survivesWindowDrag)
+
+    var opted = plain
+    opted.duringWindowDrag = true
+    check("on when asked", opted.survivesWindowDrag)
+
+    let prefs = makePrefs([opted])
+    check("the index sees it", prefs.survivesWindowDrag(button: B5, modifiers: []))
+    check("and not on an unrelated button", !prefs.survivesWindowDrag(button: B4, modifiers: []))
+    check("nor on a different modifier combination",
+          !prefs.survivesWindowDrag(button: B5, modifiers: .command))
+}
+do {
+    // Old bindings must still decode, and must default to off.
+    let legacy = """
+    [{"id":"\(UUID().uuidString)","button":4,"modifiers":0,"trigger":"swipe",
+      "action":{"kind":"none"},"isEnabled":true,"requiresConfirmation":false}]
+    """
+    let decoded = try? JSONDecoder().decode([ActionBinding].self, from: Data(legacy.utf8))
+    check("bindings saved before this field decode", decoded?.count == 1)
+    check("and default to off", decoded?.first?.survivesWindowDrag == false)
+}
+do {
+    // A foreign drag must move a gesture that opted in, and ignore one that didn't.
+    var opted = ActionBinding(button: B5, trigger: .dragLeft, action: ActionSpec(kind: .spaceRight))
+    opted.duringWindowDrag = true
+    opted.dragDistance = 10
+    let (e1, r1) = makeEngine(makePrefs([opted]))
+    _ = e1.handle(down(B5))
+    e1.handleForeignDrag(at: CGPoint(x: -60, y: 0))
+    check("a left-drag drives a gesture that opted in", r1.kinds == [.spaceRight])
+
+    var plain = opted
+    plain.duringWindowDrag = nil
+    let (e2, r2) = makeEngine(makePrefs([plain]))
+    _ = e2.handle(down(B5))
+    e2.handleForeignDrag(at: CGPoint(x: -60, y: 0))
+    check("and does nothing for one that did not", r2.kinds.isEmpty)
+}
+do {
+    // The cheap exit: this runs for every frame of every ordinary window drag.
+    let (engine, rec) = makeEngine(makePrefs())
+    engine.handleForeignDrag(at: CGPoint(x: 100, y: 100))
+    check("with nothing in flight it is a no-op", rec.kinds.isEmpty)
+}
+
+// MARK: - Measured swipes
+
+section("measured swipe direction")
+do {
+    // A swipe driven by another button's drag is delivered as a discrete action,
+    // because the window server will not commit a dock swipe underneath a live drag —
+    // measured, with a saturated gesture (progress 1.000, velocity 3.20) leaving the
+    // space unchanged. Sign convention matches DockSwipeSimulator: negative horizontal
+    // progress travels toward the space on the right.
+    check("negative horizontal goes right",
+          SmoothScrollerDirectionProbe.horizontal(-0.5) == .spaceRight)
+    check("positive horizontal goes left",
+          SmoothScrollerDirectionProbe.horizontal(0.5) == .spaceLeft)
+    check("positive vertical is App Exposé",
+          SmoothScrollerDirectionProbe.vertical(0.5) == .appExpose)
+    check("negative vertical is Mission Control",
+          SmoothScrollerDirectionProbe.vertical(-0.5) == .missionControl)
+
+    // Below the threshold a swipe means nothing, in either direction.
+    check("a short swipe commits to nothing",
+          SmoothScrollerDirectionProbe.horizontal(0.01) == nil
+              && SmoothScrollerDirectionProbe.horizontal(-0.01) == nil)
+    check("and an axis-less gesture likewise",
+          GestureEngine.measuredSwipeAction(axis: nil, progress: 1) == nil)
+}
+
+// MARK: - Scroll axes and modifiers
+
+section("per-axis scrolling and hold keys")
+do {
+    let prefs = makePrefs()
+    check("both axes smooth out of the box", prefs.smoothVertical && prefs.smoothHorizontal)
+    check("neither axis is reversed", !prefs.reverseVertical && !prefs.reverseHorizontal)
+    // Mos's own assignments, so its muscle memory carries over.
+    check("Dash is Option", prefs.scrollBoostModifier == .option)
+    check("Toggle is Shift", prefs.scrollToggleModifier == .shift)
+    check("Block is Command", prefs.scrollDisableModifier == .command)
+    check("the boost factor is sane", prefs.scrollBoostFactor > 1)
+
+    // Distance per notch is Step x Speed, matching Mos's composition and its numbers.
+    check("Step x Speed is about 91 points",
+          abs(prefs.scrollStepPx * prefs.scrollSpeed - 90.7) < 1)
+    // Mos has no rate-based acceleration at all; its Speed is flat and Dash is manual.
+    // Automatic acceleration on top is what made fast spinning run away.
+    check("no automatic acceleration, as Mos has none", prefs.scrollAcceleration == 0)
+
+    // The axes must be independent — one natural-scrolling switch for both is exactly
+    // the macOS limitation this exists to work around.
+    prefs.reverseVertical = true
+    check("reversing one axis leaves the other alone", !prefs.reverseHorizontal)
+    prefs.smoothHorizontal = false
+    check("and smoothing is per axis too", prefs.smoothVertical)
+}
+do {
+    // A hand-edited multiplier must not be able to make one notch cross the screen.
+    let prefs = makePrefs()
+    prefs.scrollBoostFactor = 1000
+    check("an absurd boost is clamped", prefs.scrollBoostFactor <= 10)
+    prefs.scrollBoostFactor = 0
+    check("and it can never shrink a scroll", prefs.scrollBoostFactor >= 1)
+}
+do {
+    let prefs = makePrefs()
+    prefs.reverseVertical = true
+    prefs.smoothHorizontal = false
+    prefs.scrollBoostModifier = .option
+    prefs.scrollBoostFactor = 4
+
+    let restored = makePrefs()
+    restored.importSettings(try! SettingsBundle.decoded(from: try! prefs.exportSettings().encoded()))
+    check("axis settings survive export",
+          restored.reverseVertical && !restored.smoothHorizontal)
+    check("hold keys survive export", restored.scrollBoostModifier == .option)
+    check("the boost factor survives export", abs(restored.scrollBoostFactor - 4) < 0.0001)
 }
 
 // MARK: - Diagnostics logging

@@ -109,6 +109,17 @@ struct BindingRow: View {
 
     @State private var showMacroEditor = false
 
+    /// Stored optional so old bindings still decode; presented as a plain checkbox.
+    /// Written back as `nil` when off so a row that never used it stays byte-identical
+    /// in the exported JSON.
+    private var dragThroughBinding: Binding<Bool> {
+        Binding(
+            get: { binding.duringWindowDrag == true },
+            set: { binding.duringWindowDrag = $0 ? true : nil }
+        )
+    }
+
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -202,6 +213,16 @@ struct BindingRow: View {
                 Spacer(minLength: 0)
 
                 timingEditor
+
+                // Only offered where movement is the input. A click or a hold is
+                // unaffected by another button dragging, so the option would be noise.
+                if binding.trigger.isDrag || binding.trigger == .swipe {
+                    Toggle("While dragging", isOn: dragThroughBinding)
+                        .toggleStyle(.checkbox)
+                        .help("Keep this gesture working while a window is already being "
+                              + "dragged — press this button mid-drag and the gesture "
+                              + "still tracks the mouse.")
+                }
 
                 if binding.action.kind.isDestructive {
                     Toggle("Confirm", isOn: $binding.requiresConfirmation)

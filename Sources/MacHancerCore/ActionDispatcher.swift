@@ -156,9 +156,7 @@ public final class ActionDispatcher: ActionPerforming {
             guard WindowTiler.isRestorable(in: pid) else {
                 return pressWindowButton(kAXMinimizeButtonAttribute, at: location)
             }
-            return WindowTiler.apply(.restore, in: pid) { [self] code, modifiers in
-                key(code, modifiers, forceFn: true)
-            }
+            return WindowTiler.apply(.restore, in: pid)
 
         case .closeWindow:       return pressWindowButton(kAXCloseButtonAttribute, at: location)
         case .minimizeWindow:    return pressWindowButton(kAXMinimizeButtonAttribute, at: location)
@@ -540,12 +538,7 @@ public final class ActionDispatcher: ActionPerforming {
     // MARK: - Tiling
 
     private func applyTile(_ tile: WindowTile, at location: CGPoint) -> Bool {
-        let pid = focusWindow(at: location)
-        // Every tiling shortcut is Fn+Control+something, and Fn is not one of the four
-        // modifiers a binding can express — it is stamped here instead.
-        return WindowTiler.apply(tile, in: pid) { [self] code, modifiers in
-            key(code, modifiers, forceFn: true)
-        }
+        WindowTiler.apply(tile, in: focusWindow(at: location))
     }
 
     /// Raises the window under the cursor and activates its app, returning that app's

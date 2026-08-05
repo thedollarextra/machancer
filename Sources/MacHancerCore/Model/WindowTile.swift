@@ -50,27 +50,13 @@ public enum WindowTile: String, CaseIterable, Sendable {
         }
     }
 
-    /// A last-resort keystroke, used only when the menu cannot be read at all.
+    /// macOS ships a key equivalent for **Center only**.
     ///
-    /// Best-effort and nothing more. Reading the real menu's `AXMenuItemCmdChar` found
-    /// a key equivalent on Center alone — Fill, the halves and the quarters all reported
-    /// none. So these are what Apple documents rather than what this Mac exposes, they
-    /// may match nothing, and the menu is the route that actually works. They stay
-    /// because the menu walk matches English titles and this is all that is left on a
-    /// system that isn't in English.
-    ///
-    /// Every one carries Fn as well as Control; see `ActionDispatcher.key`.
-    public var shortcut: (key: CGKeyCode, modifiers: ModifierSet)? {
-        switch self {
-        case .left:   return (0x7B, .control)
-        case .right:  return (0x7C, .control)
-        case .bottom: return (0x7D, .control)
-        case .top:    return (0x7E, .control)
-        case .fill:   return (0x03, .control)   // F
-        case .center: return (0x08, .control)   // C
-        case .topLeft, .topRight, .bottomLeft, .bottomRight, .restore: return nil
-        }
-    }
+    /// Read off a real menu with `AXMenuItemCmdChar`: Fill, all four halves and all four
+    /// quarters report none. Kept as a recorded measurement rather than a mechanism —
+    /// there is no keystroke path any more, because posting a shortcut that does not
+    /// exist earns a system beep and, for the halves, collides with space switching.
+    public var hasSystemShortcut: Bool { self == .center }
 
     /// The action a binding names, mapped to the position it means.
     public init?(_ kind: ActionKind) {

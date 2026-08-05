@@ -106,6 +106,31 @@ that a global rule would take that with it.
 The drags are crossed on purpose: dragging left pushes the current space out to the left,
 bringing the one on the right into view. Same convention as natural scrolling.
 
+### While another button is dragging
+
+Any drag or swipe binding can tick **While dragging** to keep working when a window is
+already being dragged — press the button mid-drag, swipe, and the window travels with you
+to the next space.
+
+It needs its own switch because macOS reports mouse motion under whichever button owns the
+drag. Once the left button is down, every move arrives as `leftMouseDragged`, so a gesture
+started afterwards with button 5 is claimed and then *starved* — it never sees the mouse
+move at all. The tap watches left and right drags purely to forward those coordinates to
+any gesture that opted in, and never suppresses them: the drag underneath has to keep
+following the cursor, since both happening at once is the entire point.
+
+Mid-drag, the swipe is **measured rather than rendered**. The window server animates a
+dock swipe underneath a live mouse drag but will not commit it — a captured gesture
+reaching progress 1.000 with release velocity 3.20, saturated and with a textbook trackpad
+velocity, still left the space unchanged. macOS's own answer to that case is ⌃← / ⌃→, which
+is how it moves a window between spaces while you drag it, so the gesture is tracked for
+its threshold and the discrete space switch is invoked on release. Same treatment the
+downward swipe already gets, for the same reason.
+
+Off by default, and per binding rather than global, because it costs the gesture its
+exclusivity — the movement belongs to two gestures simultaneously. Right for carrying a
+window to another space, wrong for anything that would fight the drag underneath it.
+
 ### Scope
 
 Every binding can apply everywhere, only in listed apps, or everywhere except them. There
@@ -229,19 +254,19 @@ stream a trackpad produces. A notch is one event carrying a whole line of travel
 is exactly what it looks like: the page jumps. The notch is swallowed and the same distance
 paid out over a fifth of a second as pixel-unit events shaped like a trackpad's.
 
-Three things make it read as a trackpad rather than as a fast wheel:
+The interpolation curve is **measured, not designed**: a listen-only capture of Mos's live
+output (389 events, 44 bursts) showed every burst opening with a ~1px event, deltas *rising*
+— 1, 10, 39, 55, 62… — and a dead stop on the largest delta, with zero tail in all 44.
+The model that reproduces this is a deadline: everything owed lands within `Duration` of the
+last notch, target speed is `pending / timeRemaining`, and actual speed chases it through a
+~30ms time constant. Slow scrolling gives crisp per-notch hops; a spin faster than the
+deadline merges into one steady glide at the input rate. Emission is 100Hz line events
+(`isContinuous=0`, no phases — also measured), with trackpad-gesture emission available as
+an option for rubber-band overscroll at the cost of phased-swipe misreads.
 
-- **Continuous pixel deltas.** `kCGScrollWheelEventIsContinuous`, plus point, fixed-point
-  and line deltas together — apps read whichever one they were written against.
-- **Gesture phases** (began / changed / ended). This is what unlocks rubber-band overscroll
-  and WebKit's smoother compositor path, and it is the reason Safari specifically stops
-  lurching. Phases are sent **vertically only**: horizontally they read as a two-finger
-  swipe and navigate back instead of scrolling. ⇧+wheel is excluded for the same reason,
-  since AppKit swaps the axis after we post.
-- **An exponential approach, not a fixed-duration curve.** Each frame delivers a fraction
-  of what is still owed. That gives the fast start and long tail of a real flick, and — the
-  actual reason it was chosen — a notch landing mid-animation just adds to the outstanding
-  distance. There is no animation to restart, retarget or cross-fade.
+Step, Speed, and the Dash/Toggle/Block keys mirror Mos's panel with its default values, so
+its numbers and muscle memory transfer directly. There is no automatic rate-based
+acceleration by default, because Mos has none — its Speed is flat and Dash is manual.
 
 A wheel is identified by Mos's discriminator rather than by `IsContinuous` alone: continuous
 input also stamps a `ScrollPhase`, a `MomentumPhase` or a `ScrollCount`, and a wheel stamps
@@ -361,7 +386,7 @@ performing them.
 ## Tests
 
 ```bash
-swift run MacHancerChecks    # 105 checks, no Xcode needed
+swift run MacHancerChecks    # 137 checks, no Xcode needed
 ```
 
 Covers pass-through and suppression, per-binding timing overrides, swipe direction and

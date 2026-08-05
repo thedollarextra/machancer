@@ -29,9 +29,21 @@ public final class UserPreferences: ObservableObject {
     /// Smooth scrolling. One wheel notch travels `defaultScrollStepPx`, paid out over
     /// `defaultScrollSmoothingSec` — roughly the distance macOS moves for a notch, over
     /// roughly the time a trackpad flick takes to coast to a stop.
-    public static let defaultScrollStepPx = 90.0
-    public static let defaultScrollSmoothingSec = 0.22
-    public static let defaultScrollAcceleration = 0.4
+    /// Step and Speed are separate for one reason: they are Mos's two dials, and
+    /// keeping them separate means a number copied from Mos means the same thing here.
+    /// Distance per notch is their product — 33.6 x 2.7 is about 91 points.
+    public static let defaultScrollStepPx = 33.6
+    public static let defaultScrollSpeed = 2.7
+    /// Measured: Mos finishes each burst 60-140ms past the final notch, with no tail.
+    public static let defaultScrollSmoothingSec = 0.09
+    /// Zero, because Mos has none.
+    ///
+    /// Mos's Speed is a *fixed* multiplier and its Dash key is manual, so distance per
+    /// notch never depends on how fast the wheel is turning. Rate-based acceleration on
+    /// top of that compounds: ten quick notches at 3x is 2700 points of outstanding
+    /// travel, which is the runaway that made this feel wild next to Mos. Available, off
+    /// by default.
+    public static let defaultScrollAcceleration = 0.0
 
     private let defaults: UserDefaults
 
@@ -111,8 +123,17 @@ public final class UserPreferences: ObservableObject {
         _closeIgnoresDesktop = flag(Keys.closeIgnoresDesktop, true)
         _dockMiddleClickEnabled = flag(Keys.dockNewInstance, true)
         _smoothScrollEnabled = flag(Keys.smoothScroll, true)
-        _scrollGesturePhases = flag(Keys.scrollGesturePhases, true)
+        _scrollGesturePhases = flag(Keys.scrollGesturePhases, false)
         _scrollMomentum = flag(Keys.scrollMomentum, true)
+        _smoothVertical = flag(Keys.smoothVertical, true)
+        _smoothHorizontal = flag(Keys.smoothHorizontal, true)
+        _reverseVertical = flag(Keys.reverseVertical, false)
+        _reverseHorizontal = flag(Keys.reverseHorizontal, false)
+        _scrollBoostFactor = number(Keys.scrollBoost, Self.defaultScrollBoost)
+        _scrollSpeed = number(Keys.scrollSpeed, Self.defaultScrollSpeed)
+        _scrollDisableModifier = ModifierSet(rawValue: Int(number(Keys.scrollDisableMod, Double(ModifierSet.command.rawValue))))
+        _scrollBoostModifier = ModifierSet(rawValue: Int(number(Keys.scrollBoostMod, Double(ModifierSet.option.rawValue))))
+        _scrollToggleModifier = ModifierSet(rawValue: Int(number(Keys.scrollToggleMod, Double(ModifierSet.shift.rawValue))))
         _scrollStepPx = number(Keys.scrollStep, Self.defaultScrollStepPx)
         _scrollSmoothingSec = number(Keys.scrollSmoothing, Self.defaultScrollSmoothingSec)
         _scrollAcceleration = number(Keys.scrollAcceleration, Self.defaultScrollAcceleration)
@@ -177,6 +198,8 @@ public final class UserPreferences: ObservableObject {
         var boundCombos: Set<Int> = []
         /// (button, modifiers) whose click is a native pass-through.
         var passthroughClickCombos: Set<Int> = []
+        /// (button, modifiers) with at least one rule that survives a window drag.
+        var dragThroughCombos: Set<Int> = []
         /// (button, modifiers) with something other than a plain click riding on them —
         /// a hold, a drag, a double click, or a chord. Those must claim the press.
         var combosNeedingPress: Set<Int> = []
@@ -244,6 +267,7 @@ public final class UserPreferences: ObservableObject {
         for (key, binding) in merged.byKey {
             let combo = Self.comboOf(key: key)
             merged.boundCombos.insert(combo)
+            if binding.survivesWindowDrag { merged.dragThroughCombos.insert(combo) }
             if binding.trigger == .click {
                 if binding.action.isNativePassthrough(for: binding.button) {
                     merged.passthroughClickCombos.insert(combo)
@@ -287,6 +311,11 @@ public final class UserPreferences: ObservableObject {
     /// mouse-down, before we know which gesture the user is making.
     public func hasBinding(button: Int, modifiers: ModifierSet, app: String? = nil) -> Bool {
         effectiveIndex(for: app).boundCombos.contains(Self.combo(button, modifiers))
+    }
+
+    /// Does any rule on this input keep working while another button is dragging?
+    public func survivesWindowDrag(button: Int, modifiers: ModifierSet, app: String? = nil) -> Bool {
+        effectiveIndex(for: app).dragThroughCombos.contains(Self.combo(button, modifiers))
     }
 
     public func chordBinding(_ a: Int, _ b: Int, modifiers: ModifierSet, app: String? = nil) -> ActionBinding? {
@@ -525,6 +554,83 @@ public final class UserPreferences: ObservableObject {
         }
     }
 
+    /// Smoothing, per axis. Independent because the two axes are used differently: a
+    /// tilt wheel or shift-scroll is usually a short deliberate nudge where animation
+    /// only adds latency, while vertical scrolling is the one you read against.
+    private var _smoothVertical = true
+    public var smoothVertical: Bool {
+        get { _smoothVertical }
+        set { _smoothVertical = newValue; write(Keys.smoothVertical, newValue) }
+    }
+
+    private var _smoothHorizontal = true
+    public var smoothHorizontal: Bool {
+        get { _smoothHorizontal }
+        set { _smoothHorizontal = newValue; write(Keys.smoothHorizontal, newValue) }
+    }
+
+    /// Direction inversion, per axis.
+    ///
+    /// macOS has exactly one natural-scrolling switch and it moves both axes together,
+    /// which is why this exists at all: wanting inverted vertical and standard
+    /// horizontal is unreachable in System Settings. Applied on top of whatever macOS
+    /// already did, so it composes rather than fights.
+    private var _reverseVertical = false
+    public var reverseVertical: Bool {
+        get { _reverseVertical }
+        set { _reverseVertical = newValue; write(Keys.reverseVertical, newValue) }
+    }
+
+    private var _reverseHorizontal = false
+    public var reverseHorizontal: Bool {
+        get { _reverseHorizontal }
+        set { _reverseHorizontal = newValue; write(Keys.reverseHorizontal, newValue) }
+    }
+
+    /// Held to pass the wheel straight through, untouched.
+    private var _scrollDisableModifier = ModifierSet.command
+    public var scrollDisableModifier: ModifierSet {
+        get { _scrollDisableModifier }
+        set { _scrollDisableModifier = newValue; write(Keys.scrollDisableMod, newValue.rawValue) }
+    }
+
+    /// Held to cover more ground per notch.
+    private var _scrollBoostModifier = ModifierSet.option
+    public var scrollBoostModifier: ModifierSet {
+        get { _scrollBoostModifier }
+        set { _scrollBoostModifier = newValue; write(Keys.scrollBoostMod, newValue.rawValue) }
+    }
+
+    /// Held to send vertical wheel movement sideways. Mos calls this the Toggle Key.
+    private var _scrollToggleModifier = ModifierSet.shift
+    public var scrollToggleModifier: ModifierSet {
+        get { _scrollToggleModifier }
+        set { _scrollToggleModifier = newValue; write(Keys.scrollToggleMod, newValue.rawValue) }
+    }
+
+    /// Mos's Speed: a flat multiplier on Step. Together they set distance per notch.
+    private var _scrollSpeed = UserPreferences.defaultScrollSpeed
+    public var scrollSpeed: Double {
+        get { _scrollSpeed }
+        set {
+            let clamped = min(max(newValue.isFinite ? newValue : Self.defaultScrollSpeed, 0.1), 10)
+            _scrollSpeed = clamped
+            write(Keys.scrollSpeed, clamped)
+        }
+    }
+
+    /// How much further a boosted notch travels.
+    public static let defaultScrollBoost = 3.0
+    private var _scrollBoostFactor = UserPreferences.defaultScrollBoost
+    public var scrollBoostFactor: Double {
+        get { _scrollBoostFactor }
+        set {
+            let clamped = min(max(newValue.isFinite ? newValue : Self.defaultScrollBoost, 1), 10)
+            _scrollBoostFactor = clamped
+            write(Keys.scrollBoost, clamped)
+        }
+    }
+
     /// Where smooth scrolling applies. Separate from `globalScope`, which gates
     /// bindings: an app that needs its raw wheel back (a game, a remote desktop, a DAW)
     /// is rarely the same app you want to disable every binding in.
@@ -659,6 +765,15 @@ public final class UserPreferences: ObservableObject {
         static let scrollGesturePhases = "scrollGesturePhases"
         static let scrollMomentum = "scrollMomentum"
         static let scrollScope = "smoothScrollScope"
+        static let smoothVertical = "scrollSmoothVertical"
+        static let smoothHorizontal = "scrollSmoothHorizontal"
+        static let reverseVertical = "scrollReverseVertical"
+        static let reverseHorizontal = "scrollReverseHorizontal"
+        static let scrollDisableMod = "scrollDisableModifier"
+        static let scrollBoostMod = "scrollBoostModifier"
+        static let scrollToggleMod = "scrollToggleModifier"
+        static let scrollBoost = "scrollBoostFactor"
+        static let scrollSpeed = "scrollSpeed"
         static let debugLog = "debugLog"
         static let keyNamesUntil = "debugLogKeyNamesUntil"
     }
@@ -687,8 +802,17 @@ public final class UserPreferences: ObservableObject {
         scrollStepPx = Self.defaultScrollStepPx
         scrollSmoothingSec = Self.defaultScrollSmoothingSec
         scrollAcceleration = Self.defaultScrollAcceleration
-        scrollGesturePhases = true
+        scrollGesturePhases = false
         scrollMomentum = true
+        smoothVertical = true
+        smoothHorizontal = true
+        reverseVertical = false
+        reverseHorizontal = false
+        scrollBoostFactor = Self.defaultScrollBoost
+        scrollSpeed = Self.defaultScrollSpeed
+        scrollDisableModifier = .command
+        scrollBoostModifier = .option
+        scrollToggleModifier = .shift
         smoothScrollScope = .everywhere
         debugLogging = false
         keyNamesUntil = 0

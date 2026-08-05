@@ -37,6 +37,14 @@ public struct SettingsBundle: Codable {
     public var scrollAcceleration: Double?
     public var scrollGesturePhases: Bool?
     public var scrollMomentum: Bool?
+    public var smoothVertical: Bool?
+    public var smoothHorizontal: Bool?
+    public var reverseVertical: Bool?
+    public var reverseHorizontal: Bool?
+    public var scrollBoostFactor: Double?
+    public var scrollDisableModifier: Int?
+    public var scrollBoostModifier: Int?
+    public var scrollToggleModifier: Int?
     public var smoothScrollScope: AppScope?
 
     public init() {}
@@ -80,6 +88,14 @@ public extension UserPreferences {
         bundle.scrollAcceleration = scrollAcceleration
         bundle.scrollGesturePhases = scrollGesturePhases
         bundle.scrollMomentum = scrollMomentum
+        bundle.smoothVertical = smoothVertical
+        bundle.smoothHorizontal = smoothHorizontal
+        bundle.reverseVertical = reverseVertical
+        bundle.reverseHorizontal = reverseHorizontal
+        bundle.scrollBoostFactor = scrollBoostFactor
+        bundle.scrollDisableModifier = scrollDisableModifier.rawValue
+        bundle.scrollBoostModifier = scrollBoostModifier.rawValue
+        bundle.scrollToggleModifier = scrollToggleModifier.rawValue
         bundle.smoothScrollScope = smoothScrollScope
         return bundle
     }
@@ -111,6 +127,14 @@ public extension UserPreferences {
         if let value = bundle.scrollAcceleration { scrollAcceleration = value }
         if let value = bundle.scrollGesturePhases { scrollGesturePhases = value }
         if let value = bundle.scrollMomentum { scrollMomentum = value }
+        if let value = bundle.smoothVertical { smoothVertical = value }
+        if let value = bundle.smoothHorizontal { smoothHorizontal = value }
+        if let value = bundle.reverseVertical { reverseVertical = value }
+        if let value = bundle.reverseHorizontal { reverseHorizontal = value }
+        if let value = bundle.scrollBoostFactor { scrollBoostFactor = value }
+        if let value = bundle.scrollDisableModifier { scrollDisableModifier = ModifierSet(rawValue: value) }
+        if let value = bundle.scrollBoostModifier { scrollBoostModifier = ModifierSet(rawValue: value) }
+        if let value = bundle.scrollToggleModifier { scrollToggleModifier = ModifierSet(rawValue: value) }
         if let value = bundle.smoothScrollScope { smoothScrollScope = value }
     }
 }

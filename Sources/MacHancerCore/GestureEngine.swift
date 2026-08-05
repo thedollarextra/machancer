@@ -94,6 +94,12 @@ public final class GestureEngine {
         var app: String?
         var gestureFired = false
         var claimed = false
+        /// Latched at claim time: this gesture keeps running while another button drags.
+        var survivesWindowDrag = false
+        /// Set once movement actually arrives under someone else's drag. Distinct from
+        /// `survivesWindowDrag`, which only records permission — this records that it
+        /// happened, and it changes how the gesture is delivered.
+        var drivenByWindowDrag = false
         var holdToken: HoldToken?
 
         /// Live dock-swipe state, set once this press is recognised as a swipe.
@@ -167,6 +173,40 @@ public final class GestureEngine {
             if input.phase == .up { pressedButtons.remove(input.button) }
             record(input, "passed through", suppressed: false)
             return false
+        }
+    }
+
+    /// Feeds movement from a *left or right* drag into any gesture that asked to
+    /// survive one.
+    ///
+    /// macOS reports mouse motion under the button that owns the drag, so once the left
+    /// button is down every move arrives as `leftMouseDragged` and a gesture started
+    /// afterwards with button 5 never sees the mouse move at all — it is claimed, and
+    /// then starved. This is the missing half: the same coordinates, delivered to the
+    /// gesture that would otherwise be waiting for a drag event that is never coming.
+    ///
+    /// Nothing is suppressed. The window drag underneath must keep following the cursor
+    /// — the whole point is that both happen at once, which is what carries a dragged
+    /// window along to the next space.
+    public func handleForeignDrag(at location: CGPoint) {
+        // The cheap exit that matters: this runs for every frame of every ordinary
+        // window drag on the system, and almost always there is nothing in flight.
+        guard !states.isEmpty else { return }
+
+        for button in Array(states.keys) {
+            guard let state = states[button], state.claimed, state.survivesWindowDrag
+            else { continue }
+            // Logged once per gesture, so the log distinguishes movement that arrived
+            // under another button's drag from an ordinary one. Without this the two
+            // are indistinguishable downstream and the feature cannot be diagnosed.
+            if !state.swipeStarted, !state.gestureFired {
+                DebugLog.write("foreign drag forwarded to \(MouseButton.label(button))")
+            }
+            states[button]?.drivenByWindowDrag = true
+            _ = continueGesture(MouseInput(
+                phase: .dragged, button: button,
+                location: location, modifiers: state.modifiers
+            ))
         }
     }
 
@@ -255,6 +295,9 @@ public final class GestureEngine {
         state.modifiers = modifiers
         state.app = app
         state.claimed = true
+        state.survivesWindowDrag = prefs.survivesWindowDrag(
+            button: button, modifiers: modifiers, app: app
+        )
 
         if let hold = prefs.binding(button: button, modifiers: modifiers, trigger: .hold, app: app) {
             let location = input.location
@@ -329,11 +372,11 @@ public final class GestureEngine {
                 if state.swipeMeasureOnly {
                     // No visual was driven, so there is nothing to release. Invoke the
                     // action directly if the gesture travelled far enough to mean it.
-                    if state.swipeProgress >= Self.swipeActionThreshold {
-                        let action = ActionBinding(button: button,
-                                                   action: ActionSpec(kind: .appExpose))
+                    if let kind = Self.measuredSwipeAction(axis: state.swipeAxis,
+                                                           progress: state.swipeProgress) {
+                        let action = ActionBinding(button: button, action: ActionSpec(kind: kind))
                         onAction(.run(action, input.location))
-                        record(input, "swipe → App Exposé", suppressed: true)
+                        record(input, "swipe → \(kind.title)", suppressed: true)
                     } else {
                         record(input, "swipe cancelled (too short)", suppressed: true)
                     }
@@ -342,7 +385,9 @@ public final class GestureEngine {
                     // a lifted finger does. Without it a part-way swipe always snaps
                     // back instead of completing on a flick.
                     onAction(.swipeEnd(velocity: state.swipeVelocity))
-                    record(input, "swipe ended", suppressed: true)
+                    record(input, String(format: "swipe ended progress=%.3f velocity=%.2f",
+                                         state.swipeProgress, state.swipeVelocity),
+                           suppressed: true)
                 }
                 state.swipeStarted = false
                 state.gestureFired = true
@@ -575,8 +620,21 @@ public final class GestureEngine {
             // while Mission Control or Exposé is already open, which is a much narrower
             // problem. Converting it to a keystroke "fixed" that one case and broke
             // ordinary space switching, which had been working.
-            state.swipeMeasureOnly = (axis == .vertical && state.swipeSign > 0)
-                && !prefs.nativeDownSwipe
+            // Measured rather than rendered whenever the window server will animate the
+            // transition but refuse to commit it.
+            //
+            // Two cases, and the second was found by measurement. A downward swipe never
+            // commits however it is fed. And *any* swipe driven by another button's drag
+            // does not commit either: with the left button physically down, a captured
+            // gesture reaching progress 1.000 with release velocity 3.20 — saturated,
+            // with a textbook trackpad velocity — still left the space unchanged. macOS
+            // will not run a space transition underneath a live mouse drag.
+            //
+            // Its own answer to that is ⌃← / ⌃→, which is how macOS moves a window
+            // between spaces while you are dragging it. So the gesture is tracked for
+            // its threshold and the discrete action is invoked on release instead.
+            state.swipeMeasureOnly = state.drivenByWindowDrag
+                || ((axis == .vertical && state.swipeSign > 0) && !prefs.nativeDownSwipe)
 
             if !state.swipeMeasureOnly {
                 onAction(.swipeBegin(axis))
@@ -590,6 +648,22 @@ public final class GestureEngine {
 
         guard !state.swipeMeasureOnly else { return }
         onAction(.swipeUpdate(target: state.swipeProgress))
+    }
+
+    /// What a measured swipe stands for, given its axis and how far it travelled.
+    ///
+    /// The horizontal sign convention is the one the captured trackpad swipes used and
+    /// that `DockSwipeSimulator` documents: negative progress travels toward the space
+    /// on the *right*.
+    public static func measuredSwipeAction(
+        axis: DockSwipeSimulator.Axis?, progress: Double
+    ) -> ActionKind? {
+        guard abs(progress) >= swipeActionThreshold else { return nil }
+        switch axis {
+        case .horizontal: return progress < 0 ? .spaceRight : .spaceLeft
+        case .vertical:   return progress > 0 ? .appExpose : .missionControl
+        case nil:         return nil
+        }
     }
 
     /// Progress at which a swipe stops being noise and commits to its direction.
