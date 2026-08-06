@@ -65,6 +65,10 @@ public final class SpaceMonitor {
     }
 
     private func note() {
+        // The other half of the pair: a posted switch that is never followed by this is
+        // one macOS declined, which looks identical from the outside to one that landed
+        // on a display you were not looking at.
+        DebugLog.write("space actually changed")
         condition.lock()
         _generation += 1
         _lastChange = ProcessInfo.processInfo.systemUptime

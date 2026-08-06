@@ -61,6 +61,7 @@ final class ManualTiming: HoldTiming {
 
 final class Recorder {
     var kinds: [ActionKind] = []
+    var bindings: [ActionBinding] = []
     var swipeBegins: [DockSwipeSimulator.Axis] = []
     var swipeTargets: [Double] = []
     var swipeEnds: [Double] = []
@@ -84,7 +85,9 @@ func makeEngine(
     let engine = GestureEngine(prefs: prefs, timing: timing, frontmostBundleID: app)
     engine.onAction = { request in
         switch request {
-        case let .run(binding, _):      recorder.kinds.append(binding.action.kind)
+        case let .run(binding, _):
+            recorder.kinds.append(binding.action.kind)
+            recorder.bindings.append(binding)
         case let .swipeBegin(axis):     recorder.swipeBegins.append(axis)
         case let .swipeUpdate(target):  recorder.swipeTargets.append(target)
         case let .swipeEnd(velocity):   recorder.swipeEnds.append(velocity)
@@ -636,6 +639,44 @@ do {
     let (engine, rec) = makeEngine(makePrefs())
     engine.handleForeignDrag(at: CGPoint(x: 100, y: 100))
     check("with nothing in flight it is a no-op", rec.kinds.isEmpty)
+}
+
+// MARK: - Mid-drag delivery
+
+section("mid-drag space switches are unpaced")
+do {
+    // Pacing waits up to 0.8s for the previous switch to be confirmed, plus a settle
+    // gap. A switch that produced no space change — the end of the row, or macOS
+    // declining it — leaves that wait armed for the *next* one, so mid drag the
+    // keystroke lands after the mouse button is already up.
+    var swipe = ActionBinding(button: B5, trigger: .swipe, action: .none)
+    swipe.duringWindowDrag = true
+    let prefs = makePrefs([swipe])
+    prefs.swipeDistanceXPx = 100
+
+    let (engine, rec) = makeEngine(prefs)
+    _ = engine.handle(down(B5))
+    engine.handleForeignDrag(at: CGPoint(x: -60, y: 0))
+    _ = engine.handle(up(B5))
+
+    // Leftward is positive progress, which is the space to the left — the same
+    // direction the rendered dock swipe would have gone. Measured and rendered must
+    // agree, or the gesture would reverse depending on whether a window happened to be
+    // under the cursor.
+    check("a mid-drag swipe delivers a discrete space switch", rec.kinds == [.spaceLeft])
+    check("marked as mid-drag so pacing is skipped",
+          rec.bindings.first?.survivesWindowDrag == true)
+}
+do {
+    // The ordinary case must stay paced: held repeats only land because of it.
+    let prefs = makePrefs([ActionBinding(button: B5, trigger: .swipe, action: .none)])
+    prefs.swipeDistanceXPx = 100
+    let (engine, rec) = makeEngine(prefs)
+    _ = engine.handle(down(B5))
+    _ = engine.handle(drag(B5, -60, 0))
+    _ = engine.handle(up(B5))
+    check("a plain swipe renders instead, and is not marked",
+          rec.kinds.isEmpty && rec.bindings.isEmpty)
 }
 
 // MARK: - Measured swipes

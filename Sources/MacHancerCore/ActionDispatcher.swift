@@ -86,7 +86,10 @@ public final class ActionDispatcher: ActionPerforming {
             return
         }
         let action = resolved(binding)
-        let succeeded = execute(action, at: location)
+        // A gesture made *during* a window drag cannot be paced. Pacing trades latency
+        // for delivery, and here latency is the whole failure: the point is that the
+        // space changes while the window is still in your hand.
+        let succeeded = execute(action, at: location, paced: !binding.survivesWindowDrag)
         announce(action, succeeded: succeeded)
     }
 
@@ -117,7 +120,7 @@ public final class ActionDispatcher: ActionPerforming {
     // MARK: - Execution
 
     @discardableResult
-    public func execute(_ action: ActionSpec, at location: CGPoint) -> Bool {
+    public func execute(_ action: ActionSpec, at location: CGPoint, paced: Bool = true) -> Bool {
         switch action.kind {
         case .none:
             return false
@@ -134,8 +137,8 @@ public final class ActionDispatcher: ActionPerforming {
         case .navigateForward:   return key(0x1E, .command)          // Cmd+]
         case .missionControl:    return missionControlApp(mode: nil)
         case .appExpose:         return missionControlApp(mode: "2")
-        case .spaceLeft:         return switchSpace(keyCode: 0x7B)
-        case .spaceRight:        return switchSpace(keyCode: 0x7C)
+        case .spaceLeft:         return switchSpace(keyCode: 0x7B, paced: paced)
+        case .spaceRight:        return switchSpace(keyCode: 0x7C, paced: paced)
         case .showDesktop:       return missionControlApp(mode: "1", fallbackKey: 0x67)
         case .screenshot:        return key(0x14, [.command, .shift])
         case .screenshotArea:    return key(0x15, [.command, .shift])
@@ -221,8 +224,25 @@ public final class ActionDispatcher: ActionPerforming {
     /// Confirmation is waited on at most once per posted switch. Asking to move past the
     /// last space in the row is a legitimate no-op that never confirms, and it must cost
     /// one timeout, not one on every switch thereafter.
-    private func switchSpace(keyCode: CGKeyCode) -> Bool {
+    private func switchSpace(keyCode: CGKeyCode, paced: Bool = true) -> Bool {
         let monitor = SpaceMonitor.shared
+
+        // Unpaced: post now and accept that a repeat arriving mid-animation may be
+        // swallowed. That trade is only correct when the request is tied to something
+        // the user is physically still doing — a window drag — where arriving a second
+        // late is worse than not arriving. Everywhere else pacing is what makes held
+        // repeats land at all.
+        //
+        // The compounding is the real reason this matters. `pendingSpaceGeneration`
+        // stays set whenever a switch produced no space change — the end of the row,
+        // or macOS declining it — so the *next* switch pays the full 0.8s timeout
+        // before it even posts. Two of those and the keystroke lands after the mouse
+        // button is already up.
+        guard paced else {
+            let posted = key(keyCode, .control)
+            DebugLog.write("space switch posted unpaced \(keyCode == 0x7B ? "left" : "right")")
+            return posted
+        }
 
         if let pending = pendingSpaceGeneration {
             pendingSpaceGeneration = nil
@@ -242,6 +262,20 @@ public final class ActionDispatcher: ActionPerforming {
         let generation = monitor.generation
         let posted = key(keyCode, .control)
         if posted { pendingSpaceGeneration = generation }
+
+        // Which display the request lands on is not ours to choose: ⌃← / ⌃→ acts on
+        // whichever display holds focus, and with separate Spaces per display that need
+        // not be the one under the cursor. Recorded so a switch that goes to the wrong
+        // monitor is distinguishable from one that never happened.
+        if DebugLog.isEnabled {
+            let mouse = CGEvent(source: nil)?.location ?? .zero
+            let screen = NSScreen.screens.firstIndex { $0.frame.contains(
+                NSPoint(x: mouse.x, y: (NSScreen.screens.first?.frame.height ?? 0) - mouse.y)
+            ) }
+            DebugLog.write("space switch posted \(keyCode == 0x7B ? "left" : "right")"
+                           + " | cursor on screen \(screen.map(String.init) ?? "?")"
+                           + " of \(NSScreen.screens.count)")
+        }
         return posted
     }
 

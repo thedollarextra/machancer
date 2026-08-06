@@ -151,18 +151,23 @@ public final class GestureEngine {
     public func handle(_ input: MouseInput) -> Bool {
         let app = frontmostBundleID()
 
+        // Continue a sequence we already claimed — *before* the exclusion gate.
+        //
+        // Scope is latched at press time by design, and this is the other half of that
+        // promise: if an excluded app comes forward mid-gesture, the gate used to eat
+        // the mouse-up, so `finish` never ran and the button stayed claimed forever.
+        // Every later press on it then resumed a gesture that had no business existing.
+        if input.phase != .down, states[input.button]?.claimed == true {
+            let suppressed = continueGesture(input)
+            if input.phase == .up { finish(input.button) }
+            return suppressed
+        }
+
         // Excluded apps see their mouse untouched — games and remote-desktop clients
         // use these buttons natively.
         if prefs.isExcluded(bundleID: app) {
             record(input, "excluded app", suppressed: false)
             return false
-        }
-
-        // Continue a sequence we already claimed.
-        if input.phase != .down, states[input.button]?.claimed == true {
-            let suppressed = continueGesture(input)
-            if input.phase == .up { finish(input.button) }
-            return suppressed
         }
 
         switch input.phase {
@@ -212,6 +217,13 @@ public final class GestureEngine {
 
     /// Drops all pending state — call when the tap stops or is re-armed.
     public func reset() {
+        // End any swipe still in flight. The window server needs the `ended` phase to
+        // decide commit-or-snap-back; without it the transition hangs half-open, and
+        // this runs on tap teardown and re-arm — precisely the moments a gesture is
+        // most likely to be mid-flight.
+        if states.contains(where: { $0.value.swipeStarted }) {
+            onAction(.swipeEnd(velocity: 0))
+        }
         for (_, state) in states { state.holdToken?.cancel() }
         for (_, token) in pendingClick { token.cancel() }
         states.removeAll(keepingCapacity: true)
@@ -236,6 +248,12 @@ public final class GestureEngine {
                 state.claimed = true
                 state.gestureFired = true
                 state.modifiers = modifiers
+                // Set for the same reason every other claim path sets them: `.zero` is
+                // the *main display's* top-left in AX space, so a swipe binding on this
+                // button would measure travel from that corner rather than from the
+                // press. On a display left of main that inverts the direction outright.
+                state.origin = input.location
+                state.app = app
                 states[button] = state
 
                 emit(chord, at: input.location)
@@ -325,6 +343,11 @@ public final class GestureEngine {
             // is held, rather than firing once and being done.
             if let swipe = prefs.binding(button: button, modifiers: state.modifiers,
                                          trigger: .swipe, app: state.app) {
+                // Recognising the swipe cancels the hold, exactly as the drag path below
+                // does. Without this a button carrying both would open App Exposé in the
+                // middle of a swipe once the hold delay elapsed.
+                state.holdToken?.cancel()
+                state.holdToken = nil
                 continueSwipe(&state, input: input, binding: swipe)
                 states[button] = state
                 return true
@@ -374,7 +397,12 @@ public final class GestureEngine {
                     // action directly if the gesture travelled far enough to mean it.
                     if let kind = Self.measuredSwipeAction(axis: state.swipeAxis,
                                                            progress: state.swipeProgress) {
-                        let action = ActionBinding(button: button, action: ActionSpec(kind: kind))
+                        // Carries the mid-drag fact through to the dispatcher, which
+                        // uses it to skip pacing — see `ActionDispatcher.switchSpace`.
+                        let action = ActionBinding(
+                            button: button, action: ActionSpec(kind: kind),
+                            duringWindowDrag: state.drivenByWindowDrag ? true : nil
+                        )
                         onAction(.run(action, input.location))
                         record(input, "swipe → \(kind.title)", suppressed: true)
                     } else {
@@ -533,7 +561,16 @@ public final class GestureEngine {
         let raw = travelled / distance
         let delta = horizontal ? -raw : raw
 
-        if state.swipeSampledAt == 0 {
+        // The first sample has no predecessor to measure against, so it seeds the clock
+        // and contributes no velocity. It used to seed `swipeSampledAt` and then read it
+        // back as "the previous sample" a few lines below, making `elapsed` a
+        // sub-microsecond gap and the instantaneous rate astronomical — which the clamp
+        // then flattened to exactly the ceiling. Every swipe released at precisely
+        // ±3.20, on every gesture, however fast the mouse actually moved: a constant
+        // wearing the costume of a measurement. This codebase already knows the
+        // recogniser rejects an implausible velocity as readily as a null one.
+        let isFirstSample = state.swipeSampledAt == 0
+        if isFirstSample {
             state.gestureFired = true
             state.swipeSampledAt = timing.now
         }
@@ -550,6 +587,11 @@ public final class GestureEngine {
         let now = timing.now
         let elapsed = max(now - state.swipeSampledAt, 0.001)
         state.swipeSampledAt = now
+        guard !isFirstSample else {
+            state.swipeProgress += delta
+            applySwipeProgress(&state, input: input, axis: axis)
+            return
+        }
         // Smoothed hard, then clamped to what a trackpad actually produces.
         //
         // `delta / elapsed` alone explodes on a high-polling mouse: big pointer-
@@ -566,7 +608,16 @@ public final class GestureEngine {
         // stream of events is the emitter's job — doing it here would tie gesture
         // timing to the mouse's reporting rate, which is what made it lurch.
         state.swipeProgress += delta
+        applySwipeProgress(&state, input: input, axis: axis)
+    }
 
+    /// Clamps the accumulated progress, latches direction, and drives the visual.
+    ///
+    /// Split out of `continueSwipe` so the first sample — which contributes position but
+    /// deliberately no velocity — can reach it without duplicating any of this.
+    private func applySwipeProgress(
+        _ state: inout ButtonState, input: MouseInput, axis: DockSwipeSimulator.Axis
+    ) {
         // A vertical swipe means opposite things either side of zero: negative opens
         // Mission Control, positive opens App Exposé. Letting one drag cross zero hands
         // the window server a gesture that reverses its own meaning mid-flight, which is
