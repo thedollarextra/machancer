@@ -448,7 +448,7 @@ do {
 
 section("dock actions")
 do {
-    check("default is New Window", DockAction.fallback == .newWindow)
+    check("apps default to New Window", DockAction.fallback(for: .application) == .newWindow)
     check("New Window is ⌘N", DockAction.newWindow.keystroke?.keyCode == 0x2D)
 
     var map = DockActionMap()
@@ -457,6 +457,33 @@ do {
     check("override is stored", map.action(for: "com.a") == .newTab)
     map.set(.newWindow, for: "com.a")
     check("returning to default drops the entry", map.customizedCount == 0)
+}
+do {
+    // Folders and Trash share the map with apps but not their default, so a key that
+    // has never been set must resolve against its own kind.
+    for kind in [DockItemKind.folder, .file, .webURL, .trash] {
+        check("\(kind.rawValue) defaults to Open", DockAction.fallback(for: kind) == .open)
+    }
+
+    var map = DockActionMap()
+    check("a pinned folder gets Open",
+          map.action(for: "/Users/x/Downloads", kind: .folder) == .open)
+    map.set(.revealInFinder, for: "/Users/x/Downloads", kind: .folder)
+    check("a folder override is stored",
+          map.action(for: "/Users/x/Downloads", kind: .folder) == .revealInFinder)
+    // The app default is New Window; storing Open against a folder must not be mistaken
+    // for a customization, and setting New Window on one must not be dropped as if it were.
+    map.set(.open, for: "/Users/x/Downloads", kind: .folder)
+    check("a folder returning to Open drops the entry", map.customizedCount == 0)
+    map.set(.newWindow, for: "/Users/x/Downloads", kind: .folder)
+    check("New Window on a folder is a real override", map.customizedCount == 1)
+
+    check("Trash is offered Open and nothing destructive",
+          DockAction.options(for: .trash) == [.open, .none])
+    check("folders are not offered app actions",
+          !DockAction.options(for: .folder).contains(.quit))
+    check("apps are still offered every app action",
+          DockAction.options(for: .application).contains(.newInstance))
 }
 
 // MARK: - Conflicts

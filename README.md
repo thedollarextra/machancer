@@ -321,16 +321,35 @@ wants its raw wheel back is rarely one you want every binding disabled in.
 
 ## Dock
 
-Middle-clicking a Dock tile runs a per-app action, configured on the **Dock** tab, which
-populates itself from the Dock.
+Middle-clicking a Dock tile runs a per-tile action, configured on the **Dock** tab, which
+populates itself from the Dock. Every tile is listed, not just the applications: pinned
+folders, pinned files and links, and Trash each get their own row and their own choice.
 
-The default is **New Window** (⌘N), not a second instance of the app — `createsNewApplicationInstance`
-launches a whole extra copy, which most apps refuse and the rest handle badly. If the app
-has no window open, or isn't running, it is launched instead; "running" and "has a window"
-are not the same thing, and ⌘N is unreliable in the gap between them.
+What a tile *is* comes from its Accessibility subrole, which is also why the list needs no
+maintenance — a folder you pin tomorrow appears on the next refresh, already set to Open.
 
-Choices are keyed by bundle identifier, so rearranging the Dock or removing and re-adding
-an app leaves them intact. Only non-default choices are stored.
+| Kind | Choices | Default |
+|---|---|---|
+| Application | New Window · New Tab · New Instance · Bring to Front · Hide · Quit · Reveal in Finder · Nothing | New Window |
+| Folder, pinned file | Open · Reveal in Finder · Nothing | Open |
+| Trash, pinned link | Open · Nothing | Open |
+
+The application default is **New Window** (⌘N), not a second instance of the app —
+`createsNewApplicationInstance` launches a whole extra copy, which most apps refuse and the
+rest handle badly. If the app has no window open, or isn't running, it is launched instead;
+"running" and "has a window" are not the same thing, and ⌘N is unreliable in the gap
+between them.
+
+Everything else defaults to **Open**, which is the thing the tile already stands for: a
+folder or Trash opens in Finder, a pinned file opens in whatever owns it, a link opens in
+the browser. Trash is offered nothing destructive — a stray middle click should not be able
+to empty it.
+
+Choices are keyed by bundle identifier for applications and by path for everything else, so
+rearranging the Dock or removing and re-adding an item leaves them intact. Trash is keyed
+by a fixed name rather than `~/.Trash`, so an exported settings file still matches on
+another account. Only non-default choices are stored, and the default is per kind — Open on
+a folder is stored as nothing at all, exactly as New Window on an app is.
 
 The press is suppressed so the Dock's context menu doesn't appear over the action. That
 needs a Dock hit-test inside the tap callback, where a blocking cross-process call is
@@ -366,7 +385,7 @@ is a nine-line shim.
 | `Model/Actions.swift` | `ActionKind` / `ActionSpec`, macro steps |
 | `Model/ActionBinding.swift` | `TriggerKind`, `ActionBinding`, seeded defaults |
 | `Model/AppScope.swift` | Where a binding applies |
-| `Model/DockAction.swift` | Per-app Dock middle-click behaviour |
+| `Model/DockAction.swift` | Per-tile Dock middle-click behaviour, and what each kind is offered |
 | `Model/SettingsBundle.swift` | Import / export document |
 | `GestureEngine.swift` | Pure decision logic: suppress? which action? (no `CGEvent`) |
 | `EventTapManager.swift` | Tap plumbing, permission recovery, state reporting |
@@ -374,6 +393,7 @@ is a nine-line shim.
 | `AccessibilityBridge.swift` | Crash-safe wrappers over the `AXUIElement` C API |
 | `DockProbe.swift` | Cached "is this point on the Dock?" |
 | `UserPreferences.swift` | Storage plus the hot-path lookup index |
+| `Services/DockInventory.swift` | What each Dock tile is, points at, and is keyed by |
 | `Services/SmoothScroller.swift` | Wheel notch → trackpad-shaped pixel stream |
 | `Services/SpaceMonitor.swift` | When macOS actually finished changing space |
 | `Services/` | Dock swipe driver, login item, HUD, event log, permission repair |

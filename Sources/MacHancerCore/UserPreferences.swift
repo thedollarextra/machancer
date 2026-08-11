@@ -363,8 +363,8 @@ public final class UserPreferences: ObservableObject {
 
     // MARK: - Dock
 
-    /// Per-app middle-click behaviour. Only apps that differ from the default are
-    /// stored, so this stays small however large the Dock is.
+    /// Per-tile middle-click behaviour. Only tiles that differ from their kind's default
+    /// are stored, so this stays small however large the Dock is.
     private var _dockActions = DockActionMap()
     public var dockActions: DockActionMap {
         get { _dockActions }
@@ -379,8 +379,8 @@ public final class UserPreferences: ObservableObject {
     }
 
     /// Hot path: read on every middle click, so it avoids copying the whole map.
-    public func dockAction(for bundleID: String) -> DockAction {
-        _dockActions.action(for: bundleID)
+    public func dockAction(for key: String, kind: DockItemKind = .application) -> DockAction {
+        _dockActions.action(for: key, kind: kind)
     }
 
     private var _dockMiddleClickEnabled = true
