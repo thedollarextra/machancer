@@ -1,12 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Middle-click behaviour for every app in the Dock.
+/// Middle-click behaviour for everything in the Dock: applications, pinned folders,
+/// pinned files and links, and Trash.
 ///
 /// The list is read from the Dock itself rather than maintained by hand, so it always
-/// matches what is actually there. Settings are stored per bundle identifier, which
-/// means rearranging the Dock, removing an app and putting it back, or renaming it
-/// leaves the choice intact — and apps left at the default cost no storage at all.
+/// matches what is actually there. Settings are stored per bundle identifier for apps and
+/// per path for everything else, which means rearranging the Dock, removing an item and
+/// putting it back, or renaming an app leaves the choice intact — and items left at the
+/// default cost no storage at all.
 struct DockTab: View {
     @ObservedObject var prefs: UserPreferences
 
@@ -21,7 +23,7 @@ struct DockTab: View {
 
             if items.isEmpty {
                 ContentUnavailableView(
-                    hasLoaded ? "No Dock Apps Found" : "Reading the Dock…",
+                    hasLoaded ? "No Dock Items Found" : "Reading the Dock…",
                     systemImage: "dock.rectangle",
                     description: Text(hasLoaded
                         ? "Reading the Dock needs Accessibility access. Check the General tab."
@@ -30,7 +32,7 @@ struct DockTab: View {
             } else {
                 List {
                     ForEach(items) { item in
-                        DockAppRow(item: item, action: action(for: item.bundleID))
+                        DockItemRow(item: item, action: action(for: item))
                             .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 10))
                     }
                 }
@@ -62,14 +64,14 @@ struct DockTab: View {
     private var footer: some View {
         HStack {
             Text(prefs.dockActions.customizedCount == 0
-                 ? "All apps use the default."
-                 : "\(prefs.dockActions.customizedCount) app\(prefs.dockActions.customizedCount == 1 ? "" : "s") customized.")
+                 ? "All items use their default."
+                 : "\(prefs.dockActions.customizedCount) item\(prefs.dockActions.customizedCount == 1 ? "" : "s") customized.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Spacer()
 
-            Button("Reset All to New Window") {
+            Button("Reset All to Defaults") {
                 var map = prefs.dockActions
                 map.resetAll()
                 prefs.dockActions = map
@@ -86,20 +88,23 @@ struct DockTab: View {
     }
 
     /// Writes go through `prefs.dockActions` wholesale so the change is persisted.
-    private func action(for bundleID: String) -> Binding<DockAction> {
+    ///
+    /// The kind rides along on both sides because the default differs by kind, and a
+    /// choice equal to the default is stored as nothing at all.
+    private func action(for item: DockInventory.Item) -> Binding<DockAction> {
         Binding(
-            get: { prefs.dockActions.action(for: bundleID) },
+            get: { prefs.dockActions.action(for: item.key, kind: item.kind) },
             set: { newValue in
                 var map = prefs.dockActions
-                map.set(newValue, for: bundleID)
+                map.set(newValue, for: item.key, kind: item.kind)
                 prefs.dockActions = map
             }
         )
     }
 }
 
-/// One Dock app: icon, name, and what middle-clicking it does.
-private struct DockAppRow: View {
+/// One Dock tile: icon, name, and what middle-clicking it does.
+private struct DockItemRow: View {
     let item: DockInventory.Item
     @Binding var action: DockAction
 
@@ -109,12 +114,23 @@ private struct DockAppRow: View {
                 .resizable()
                 .frame(width: 22, height: 22)
 
-            Text(item.title)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .lineLimit(1)
+                // Two folders can share a name — one Downloads in the home folder and
+                // another on an external disk look identical without this.
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            }
 
             Spacer(minLength: 12)
 
-            if action != DockAction.fallback {
+            if action != DockAction.fallback(for: item.kind) {
                 // Marks the rows the user has actually changed, so a customized Dock is
                 // scannable without reading every picker.
                 Image(systemName: "pencil.circle.fill")
@@ -123,12 +139,31 @@ private struct DockAppRow: View {
             }
 
             Picker("", selection: $action) {
-                ForEach(DockAction.allCases) { option in
-                    Text(option.title).tag(option)
+                ForEach(DockAction.options(for: item.kind)) { option in
+                    Text(option.title(for: item.kind)).tag(option)
                 }
             }
             .labelsHidden()
-            .frame(width: 210)
+            // Trailing, not centred: a popup sizes itself to its longest option, so the
+            // three-item folder menu is narrower than the eight-item application one and
+            // the column went ragged the moment the Dock's pinned section appeared here.
+            .frame(width: 210, alignment: .trailing)
+        }
+    }
+}
+
+private extension DockItemRow {
+    /// The path, abbreviated the way a shell would. Applications are left bare: their
+    /// install location is never the ambiguous part, and forty rows of `/Applications`
+    /// is just noise.
+    var subtitle: String? {
+        switch item.kind {
+        case .application, .trash:
+            return nil
+        case .folder, .file:
+            return item.url.map { (($0.path as NSString).abbreviatingWithTildeInPath) }
+        case .webURL:
+            return item.url?.absoluteString
         }
     }
 }

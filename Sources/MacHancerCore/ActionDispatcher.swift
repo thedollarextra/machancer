@@ -673,22 +673,53 @@ public final class ActionDispatcher: ActionPerforming {
         return nil
     }
 
-    // MARK: - Dock: per-app middle click
+    // MARK: - Dock: per-tile middle click
 
     /// Runs the configured action for the Dock tile under `location`.
     ///
     /// Called for *every* plain middle click, so it confirms the cursor really is over a
     /// Dock tile before doing anything at all.
     public func performDockAction(forItemAt location: CGPoint) {
-        guard
-            let name = dockItemTitle(at: location),
-            let url = DockInventory.applicationURL(named: name),
-            let bundleID = Bundle(url: url)?.bundleIdentifier
+        // Cheap reject first. Enumerating the tiles costs an AX round trip per tile per
+        // attribute — roughly a hundred on a normal Dock — and this runs on every plain
+        // middle click, including middle-clicking links in a browser.
+        guard couldBeDock(location), let target = DockInventory.target(at: location)
         else { return }
 
-        let action = prefs.dockAction(for: bundleID)
+        let action = prefs.dockAction(for: target.key, kind: target.kind)
         guard action != .none else { return }
-        perform(action, on: url, bundleID: bundleID, name: name)
+        perform(action, on: target)
+    }
+
+    /// Performs one Dock action against one tile.
+    private func perform(_ action: DockAction, on target: DockInventory.Target) {
+        switch action {
+        case .none:
+            return
+
+        case .open:
+            // Finder handles folders and Trash; a document or link goes to whatever owns
+            // it. One call covers all four because that is exactly what `open` means.
+            guard let url = target.url else { return }
+            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+
+        case .revealInFinder:
+            guard let url = target.url, url.isFileURL else { return }
+            DispatchQueue.main.async {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+
+        case .newWindow, .newTab, .newInstance, .activate, .hide, .quit:
+            // These only mean anything to an application, and the picker only offers
+            // them there — but a stored setting outlives the tile it was made for, and a
+            // path can be replaced by a folder of the same name.
+            guard target.kind == .application, let url = target.url else { return }
+            // Announces its own outcome: whether ⌘N was sent or the app was relaunched
+            // isn't known until it runs.
+            performApp(action, on: url, bundleID: target.key, name: target.title)
+            return
+        }
+        announceDock(action, name: target.title)
     }
 
     /// Performs one Dock action against a specific app.
@@ -697,11 +728,11 @@ public final class ActionDispatcher: ActionPerforming {
     /// first and waiting for the activation to land — a ⌘N posted before the app is
     /// frontmost goes to whatever was. If the app isn't running, launching it produces a
     /// window on its own and no keystroke is needed.
-    private func perform(_ action: DockAction, on url: URL, bundleID: String, name: String) {
+    private func performApp(_ action: DockAction, on url: URL, bundleID: String, name: String) {
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
 
         switch action {
-        case .none:
+        case .none, .open, .revealInFinder:
             return
 
         case .newInstance:
@@ -773,35 +804,6 @@ public final class ActionDispatcher: ActionPerforming {
         DispatchQueue.main.async {
             FeedbackHUD.shared.show("\(name) — \(action.shortTitle)")
         }
-    }
-
-    /// Title of the Dock tile under `location`, or nil if the point isn't on one.
-    ///
-    /// The obvious approach — `AXUIElementCopyElementAtPosition` — does not work here:
-    /// the Dock returns `kAXErrorNotImplemented` (-25208) for positional hit-tests, on
-    /// its tiles and on the strip as a whole. Verified on macOS 26.3. So enumerate the
-    /// tiles and match the point against their reported frames instead.
-    func dockItemTitle(at location: CGPoint) -> String? {
-        // Cheap reject first. Enumerating the tiles costs an AX round trip per tile
-        // per attribute — roughly 80 of them on a normal Dock — and this runs on every
-        // plain middle click, including middle-clicking links in a browser.
-        guard couldBeDock(location) else { return nil }
-
-        guard let dock = NSRunningApplication
-            .runningApplications(withBundleIdentifier: "com.apple.dock").first
-        else { return nil }
-
-        let dockElement = AXUIElementCreateApplication(dock.processIdentifier)
-        for list in AX.children(dockElement) {
-            for tile in AX.children(list) {
-                guard AX.role(tile) == "AXDockItem",
-                      let frame = AX.frame(tile),
-                      frame.contains(location)
-                else { continue }
-                return AX.string(tile, kAXTitleAttribute as String)
-            }
-        }
-        return nil
     }
 
     /// Is this point plausibly on the Dock? Pure geometry, no cross-process calls.

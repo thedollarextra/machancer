@@ -37,6 +37,17 @@ public enum AX {
         attribute(element, name) as? Bool
     }
 
+    /// `AXURL` comes back as a `CFURL`, which bridges to `URL` — except when the process
+    /// on the other side hands over a string instead, which some do. Both are accepted
+    /// rather than trusting one cast.
+    public static func url(_ element: AXUIElement, _ name: String) -> URL? {
+        guard let value = attribute(element, name) else { return nil }
+        if let url = value as? URL { return url }
+        if let url = value as? NSURL { return url as URL }
+        if let string = value as? String { return URL(string: string) }
+        return nil
+    }
+
     /// Safe downcast of an attribute value to an AXUIElement.
     public static func child(_ element: AXUIElement, _ name: String) -> AXUIElement? {
         guard let value = attribute(element, name) else { return nil }
