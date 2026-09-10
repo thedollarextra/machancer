@@ -300,8 +300,8 @@ public struct ActionBinding: Codable, Hashable, Identifiable, Sendable {
 
     /// The bindings a fresh install starts with.
     ///
-    /// Order is meaningful and this is the order they are in: the two Safari-scoped
-    /// click rules come first, ahead of everything unscoped.
+    /// Order is meaningful — the first matching rule wins among equally-scoped rules —
+    /// and this is the order they are in, app-scoped clicks ahead of everything else.
     public static var defaults: [ActionBinding] {
         // Back and forward, scoped to Safari, because that is the one browser where they
         // are otherwise unreachable. Safari has never supported buttons 4 and 5 for
@@ -309,30 +309,84 @@ public struct ActionBinding: Codable, Hashable, Identifiable, Sendable {
         // treats an unrecognised extra button the way it treats a middle click, so
         // leaving them native opens images in new tabs instead of going back. Chromium
         // browsers implement it themselves and need no help, which is exactly why these
-        // two are scoped rather than global: ⌘[ and ⌘] mean "outdent" in a fair number
-        // of editors, and a global rule would take that with it.
+        // are scoped rather than global: ⌘[ and ⌘] mean "outdent" in a fair number of
+        // editors, and a global rule would take that with it.
         let safari = AppScope(mode: .onlyIn, bundleIDs: ["com.apple.Safari"])
+        let finder = AppScope(mode: .onlyIn, bundleIDs: ["com.apple.finder"])
+        let pdfExpert = AppScope(mode: .onlyIn, bundleIDs: ["com.readdle.PDFExpert-Mac"])
+
+        // ⌃⌥⌘ on the arrow keys, which is what the tiling rows below are bound to.
+        let tilingChord: ModifierSet = [.control, .option, .command]
 
         return [
+            // MARK: Browser navigation
             ActionBinding(button: MouseButton.button5, action: ActionSpec(kind: .navigateForward),
                           scope: safari),
             ActionBinding(button: MouseButton.button4, action: ActionSpec(kind: .navigateBack),
                           scope: safari),
 
-            ActionBinding(button: MouseButton.button5, trigger: .hold, action: ActionSpec(kind: .appExpose)),
-            ActionBinding(button: MouseButton.button5, trigger: .dragUp, action: ActionSpec(kind: .missionControl)),
-            ActionBinding(button: MouseButton.button5, trigger: .dragDown, action: ActionSpec(kind: .appExpose)),
             // The spec's Ctrl+Option+Cmd+middle-click close chord is just another binding now.
-            ActionBinding(
-                button: MouseButton.middle,
-                modifiers: [.control, .option, .command],
-                action: ActionSpec(kind: .closeWindow)
-            ),
-            // Deliberately crossed: dragging left pushes the current space out to the
-            // left, which brings the space on the right into view. Same convention as
-            // natural scrolling, and the same direction a trackpad swipe moves them.
-            ActionBinding(button: MouseButton.button5, trigger: .dragLeft, action: ActionSpec(kind: .spaceRight)),
-            ActionBinding(button: MouseButton.button5, trigger: .dragRight, action: ActionSpec(kind: .spaceLeft)),
+            ActionBinding(button: MouseButton.middle, modifiers: tilingChord,
+                          action: ActionSpec(kind: .closeWindow)),
+
+            // MARK: Button 5 — spaces and Mission Control
+            //
+            // One swipe binding covers all four directions: the window server decides
+            // what each means, which is what makes it feel native. `duringWindowDrag`
+            // lets it keep working while a window is already being dragged, so a window
+            // can be carried to another space in one motion.
+            ActionBinding(button: MouseButton.button5, trigger: .swipe,
+                          action: ActionSpec(kind: .missionControl), duringWindowDrag: true),
+
+            // MARK: Button 5 — window tiling by direction
+            //
+            // Also marked for window drags, and for the same reason: the common case is
+            // grabbing a window and flicking it into position without letting go.
+            ActionBinding(button: MouseButton.button4, trigger: .dragLeft,
+                          action: ActionSpec(kind: .tileLeft), duringWindowDrag: true),
+            ActionBinding(button: MouseButton.button4, trigger: .dragRight,
+                          action: ActionSpec(kind: .tileRight), duringWindowDrag: true),
+            ActionBinding(button: MouseButton.button4, trigger: .dragUp,
+                          action: ActionSpec(kind: .tileFill), duringWindowDrag: true),
+            ActionBinding(button: MouseButton.button4, trigger: .dragDown,
+                          action: ActionSpec(kind: .tileRestoreOrMinimize), duringWindowDrag: true),
+
+            // MARK: ⌃⌥⌘ + arrows — the same tiling from the keyboard
+            ActionBinding(button: MouseButton.keyButton(0x7B), modifiers: tilingChord,
+                          action: ActionSpec(kind: .tileLeft)),
+            ActionBinding(button: MouseButton.keyButton(0x7C), modifiers: tilingChord,
+                          action: ActionSpec(kind: .tileRight)),
+            ActionBinding(button: MouseButton.keyButton(0x7E), modifiers: tilingChord,
+                          action: ActionSpec(kind: .tileFill)),
+            ActionBinding(button: MouseButton.keyButton(0x7D), modifiers: tilingChord,
+                          action: ActionSpec(kind: .tileRestoreOrMinimize)),
+
+            // MARK: Per-app navigation that has no mouse-button equivalent
+            //
+            // PDF Expert pages with ⌘⇧[ / ⌘⇧], not the ⌘[ / ⌘] every other app uses, so
+            // ⌥⌘+arrow is translated rather than passed through.
+            ActionBinding(button: MouseButton.keyButton(0x7B), modifiers: [.option, .command],
+                          action: ActionSpec(kind: .customKeystroke,
+                                             keystroke: Keystroke(keyCode: 33,
+                                                                  modifiers: [.command, .shift])),
+                          scope: pdfExpert),
+            ActionBinding(button: MouseButton.keyButton(0x7C), modifiers: [.option, .command],
+                          action: ActionSpec(kind: .customKeystroke,
+                                             keystroke: Keystroke(keyCode: 30,
+                                                                  modifiers: [.command, .shift])),
+                          scope: pdfExpert),
+
+            // Finder has no back/forward on the extra buttons either; ⌘[ and ⌘] are
+            // what it listens to.
+            ActionBinding(button: MouseButton.button4,
+                          action: ActionSpec(kind: .customKeystroke,
+                                             keystroke: Keystroke(keyCode: 33, modifiers: .command)),
+                          scope: finder),
+            ActionBinding(button: MouseButton.button5,
+                          action: ActionSpec(kind: .customKeystroke,
+                                             keystroke: Keystroke(keyCode: 30, modifiers: .command)),
+                          scope: finder),
         ]
     }
+
 }

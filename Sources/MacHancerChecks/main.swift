@@ -160,19 +160,23 @@ do {
     check("a drag does not also replay a click", r2.kinds == [.spaceRight])
 }
 do {
-    // The shipped defaults, end to end: this is the exact case that broke.
+    // The shipped defaults, end to end. Button 5's plain click has no unscoped rule,
+    // so the claimed press must come back as a real click rather than be eaten.
     let prefs = makePrefs(ActionBinding.defaults)
 
     let (e5, r5) = makeEngine(prefs)
     _ = e5.handle(down(B5)); _ = e5.handle(up(B5))
     check("button 5 clicks natively with the shipped defaults", r5.kinds == [.mouseButton])
 
+    // Button 4 now carries unscoped tiling drags, so its press *is* claimed everywhere
+    // — and a plain click still has to survive that.
     let (e4, r4) = makeEngine(prefs)
-    check("button 4 is untouched outside Safari", e4.handle(down(B4)) == false)
-    check("and dispatches nothing of its own", r4.kinds.isEmpty)
+    check("button 4 is claimed for its tiling drags", e4.handle(down(B4)) == true)
+    _ = e4.handle(up(B4))
+    check("and a plain click still comes back", r4.kinds == [.mouseButton])
 }
 do {
-    // ...and inside Safari the same two buttons navigate instead.
+    // Inside Safari the two buttons navigate instead of clicking through.
     let prefs = makePrefs(ActionBinding.defaults)
     let safari = { "com.apple.Safari" as String? }
 
@@ -185,10 +189,10 @@ do {
     _ = e5.handle(down(B5)); _ = e5.handle(up(B5))
     check("button 5 goes forward", r5.kinds == [.navigateForward])
 
-    // The scoped click must not cost button 5 its gestures.
+    // The scoped click must not cost button 4 its tiling drags.
     let (e6, r6) = makeEngine(prefs, app: safari)
-    _ = e6.handle(down(B5)); _ = e6.handle(drag(B5, 0, -60)); _ = e6.handle(up(B5))
-    check("a drag in Safari still reaches Mission Control", r6.kinds == [.missionControl])
+    _ = e6.handle(down(B4)); _ = e6.handle(drag(B4, -60, 0)); _ = e6.handle(up(B4))
+    check("a drag in Safari still tiles", r6.kinds == [.tileLeft])
 }
 
 // MARK: - Per-binding overrides
@@ -373,27 +377,41 @@ do {
     // live stream, not assumed.
     check("line events are the default emission shape", prefs.scrollGesturePhases == false)
 
-    // Button 4's only rule is Safari-scoped, so everywhere else its press is never
-    // suppressed — which is what keeps apps that read the button directly working.
-    check("button 4's only rule is scoped to Safari",
-          ActionBinding.defaults.filter { $0.button == B4 }
-              .allSatisfy { $0.effectiveScope.bundleIDs == ["com.apple.Safari"] })
-    check("button 4 passes through outside Safari",
-          !prefs.hasBinding(button: B4, modifiers: []))
-    check("and is bound inside it",
-          prefs.hasBinding(button: B4, modifiers: [], app: "com.apple.Safari"))
-    check("a plain button 5 click has no unscoped rule",
-          prefs.binding(button: B5, modifiers: [], trigger: .click) == nil)
+    let d = ActionBinding.defaults
+    check("sixteen bindings ship", d.count == 16)
 
-    let triggers = Set(ActionBinding.defaults.filter { $0.button == B5 }.map(\.trigger))
-    check("button 5 carries hold, all four drags and a scoped click",
-          triggers == [.click, .hold, .dragUp, .dragDown, .dragLeft, .dragRight])
-    check("dragging left goes to the space on the right",
-          prefs.binding(button: B5, modifiers: [], trigger: .dragLeft)?.action.kind == .spaceRight)
-    check("dragging right goes to the space on the left",
-          prefs.binding(button: B5, modifiers: [], trigger: .dragRight)?.action.kind == .spaceLeft)
+    // Button 4 drives tiling by direction; button 5 drives spaces by swipe. Both are
+    // marked to survive a window drag, which is the common case for each — flick a
+    // window into position, or carry it to another space, without letting go.
+    let b4drags = d.filter { $0.button == B4 && $0.trigger.isDrag }
+    check("button 4 tiles in all four directions", Set(b4drags.map(\.trigger)).count == 4)
+    check("and every one survives a window drag", b4drags.allSatisfy(\.survivesWindowDrag))
+    check("dragging left tiles left",
+          b4drags.first { $0.trigger == .dragLeft }?.action.kind == .tileLeft)
+    check("dragging down restores or minimises",
+          b4drags.first { $0.trigger == .dragDown }?.action.kind == .tileRestoreOrMinimize)
+
+    let swipe = d.first { $0.trigger == .swipe }
+    check("button 5 carries the swipe", swipe?.button == B5)
+    check("and it survives a window drag too", swipe?.survivesWindowDrag == true)
+
+    // The same tiling reachable from the keyboard, on ⌃⌥⌘ + arrows.
+    let chord: ModifierSet = [.control, .option, .command]
+    let keyTiles = d.filter { MouseButton.isKey($0.button) && $0.modifiers == chord }
+    check("⌃⌥⌘ + arrows tile from the keyboard", keyTiles.count == 4)
+
+    // Two apps need a translated keystroke because the plain button does nothing there.
+    let scoped = { (id: String) in d.filter { $0.effectiveScope.bundleIDs == [id] } }
+    check("Safari gets back and forward", scoped("com.apple.Safari").count == 2)
+    check("Finder gets ⌘[ and ⌘]", scoped("com.apple.finder").count == 2)
+    check("PDF Expert gets its own paging keys",
+          scoped("com.readdle.PDFExpert-Mac").count == 2)
+    check("PDF Expert's are ⌘⇧, not ⌘",
+          scoped("com.readdle.PDFExpert-Mac")
+              .allSatisfy { $0.action.keystroke?.modifiers == [.command, .shift] })
+
     check("close window keeps its ⌃⌥⌘ middle click",
-          prefs.binding(button: MouseButton.middle, modifiers: [.control, .option, .command],
+          prefs.binding(button: MouseButton.middle, modifiers: chord,
                         trigger: .click)?.action.kind == .closeWindow)
     check("no default rule shadows another", prefs.shadowedBindingIDs.isEmpty)
 }
