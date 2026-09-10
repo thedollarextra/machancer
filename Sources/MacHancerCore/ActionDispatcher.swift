@@ -174,10 +174,6 @@ public final class ActionDispatcher: ActionPerforming {
 
         case .customKeystroke:
             guard let stroke = action.keystroke else { return false }
-            // Deliberately not naming the key: this fires for any bound keystroke, and
-            // the log must not become a record of what was typed. The modifiers and the
-            // fact it was posted are what tell you whether the binding reached here.
-            DebugLog.write("posting custom keystroke, modifiers=\(stroke.modifiers.rawValue)")
             return key(CGKeyCode(stroke.keyCode), stroke.modifiers)
 
         case .launchApplication:
@@ -239,9 +235,7 @@ public final class ActionDispatcher: ActionPerforming {
         // before it even posts. Two of those and the keystroke lands after the mouse
         // button is already up.
         guard paced else {
-            let posted = key(keyCode, .control)
-            DebugLog.write("space switch posted unpaced \(keyCode == 0x7B ? "left" : "right")")
-            return posted
+            return key(keyCode, .control)
         }
 
         if let pending = pendingSpaceGeneration {
@@ -263,19 +257,6 @@ public final class ActionDispatcher: ActionPerforming {
         let posted = key(keyCode, .control)
         if posted { pendingSpaceGeneration = generation }
 
-        // Which display the request lands on is not ours to choose: ⌃← / ⌃→ acts on
-        // whichever display holds focus, and with separate Spaces per display that need
-        // not be the one under the cursor. Recorded so a switch that goes to the wrong
-        // monitor is distinguishable from one that never happened.
-        if DebugLog.isEnabled {
-            let mouse = CGEvent(source: nil)?.location ?? .zero
-            let screen = NSScreen.screens.firstIndex { $0.frame.contains(
-                NSPoint(x: mouse.x, y: (NSScreen.screens.first?.frame.height ?? 0) - mouse.y)
-            ) }
-            DebugLog.write("space switch posted \(keyCode == 0x7B ? "left" : "right")"
-                           + " | cursor on screen \(screen.map(String.init) ?? "?")"
-                           + " of \(NSScreen.screens.count)")
-        }
         return posted
     }
 
@@ -362,8 +343,6 @@ public final class ActionDispatcher: ActionPerforming {
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
 
-        DebugLog.write("replayed button \(button) at "
-                       + "\(Int(location.x)),\(Int(location.y)) flags=\(heldModifiers.rawValue)")
         return true
     }
 
@@ -683,10 +662,17 @@ public final class ActionDispatcher: ActionPerforming {
         // Cheap reject first. Enumerating the tiles costs an AX round trip per tile per
         // attribute — roughly a hundred on a normal Dock — and this runs on every plain
         // middle click, including middle-clicking links in a browser.
-        guard couldBeDock(location), let target = DockInventory.target(at: location)
-        else { return }
+        guard couldBeDock(location) else {
+            DebugLog.write("dock: rejected by couldBeDock")
+            return
+        }
+        guard let target = DockInventory.target(at: location) else {
+            DebugLog.write("dock: no tile under the cursor")
+            return
+        }
 
         let action = prefs.dockAction(for: target.key, kind: target.kind)
+        DebugLog.write("dock: \(target.kind) “\(target.key)” -> \(action)")
         guard action != .none else { return }
         perform(action, on: target)
     }
@@ -816,10 +802,15 @@ public final class ActionDispatcher: ActionPerforming {
     private func couldBeDock(_ location: CGPoint) -> Bool {
         if frontmostWindow(containing: location) == nil { return true }
 
-        for screen in NSScreen.screens {
-            let frame = cgRect(screen.frame)
-            guard frame.contains(location) else { continue }
-            return !cgRect(screen.visibleFrame).contains(location)
+        // Read from a main-thread snapshot, not from `NSScreen` directly. This runs on
+        // the dispatcher's background queue, where AppKit's screen list may come back
+        // stale or empty — and an empty list made this return `false` for every click,
+        // rejecting the whole Dock silently.
+        let screens = ScreenGeometry.shared.screens
+        if screens.isEmpty { return true }   // can't tell; let the tile lookup decide
+
+        for screen in screens where screen.full.contains(location) {
+            return !screen.visible.contains(location)
         }
         return false
     }

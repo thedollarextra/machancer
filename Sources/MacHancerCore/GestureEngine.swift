@@ -96,6 +96,9 @@ public final class GestureEngine {
         var claimed = false
         /// Latched at claim time: this gesture keeps running while another button drags.
         var survivesWindowDrag = false
+        /// Set when movement arrived under someone else's drag but this gesture had
+        /// not opted in, so it was ignored. Purely so the failure can name itself.
+        var starvedByWindowDrag = false
         /// Set once movement actually arrives under someone else's drag. Distinct from
         /// `survivesWindowDrag`, which only records permission — this records that it
         /// happened, and it changes how the gesture is delivered.
@@ -193,19 +196,25 @@ public final class GestureEngine {
     /// Nothing is suppressed. The window drag underneath must keep following the cursor
     /// — the whole point is that both happen at once, which is what carries a dragged
     /// window along to the next space.
+    /// Whether any gesture is mid-flight. Checked by the tap before it even reads the
+    /// event's location: `leftMouseDragged` fires for every window drag anywhere on the
+    /// system, and almost none of them concern us.
+    public var hasActiveGestures: Bool { !states.isEmpty }
+
     public func handleForeignDrag(at location: CGPoint) {
         // The cheap exit that matters: this runs for every frame of every ordinary
         // window drag on the system, and almost always there is nothing in flight.
         guard !states.isEmpty else { return }
 
         for button in Array(states.keys) {
-            guard let state = states[button], state.claimed, state.survivesWindowDrag
-            else { continue }
-            // Logged once per gesture, so the log distinguishes movement that arrived
-            // under another button's drag from an ordinary one. Without this the two
-            // are indistinguishable downstream and the feature cannot be diagnosed.
-            if !state.swipeStarted, !state.gestureFired {
-                DebugLog.write("foreign drag forwarded to \(MouseButton.label(button))")
+            guard let state = states[button], state.claimed else { continue }
+            guard state.survivesWindowDrag else {
+                // Held, and the mouse *is* moving — but under another button's drag, so
+                // this gesture will never see it and will fall through to a click. That
+                // is invisible from the outside and reads as "the drag sometimes does
+                // nothing", so it is recorded rather than left to be rediscovered.
+                states[button]?.starvedByWindowDrag = true
+                continue
             }
             states[button]?.drivenByWindowDrag = true
             _ = continueGesture(MouseInput(
@@ -463,6 +472,10 @@ public final class GestureEngine {
     /// A release with no gesture is a click — unless a double-click binding exists,
     /// in which case the single click waits to see if a second one lands.
     private func resolveClick(button: Int, modifiers: ModifierSet, app: String?, at location: CGPoint, input: MouseInput) {
+        if states[button]?.starvedByWindowDrag == true {
+            DebugLog.write("\(DebugLog.label(for: button)): moved during a window drag but "
+                           + "this binding has “While dragging” off, so it fell back to a click")
+        }
         let single = clickAction(button: button, modifiers: modifiers, app: app)
 
         guard prefs.hasDoubleClickBinding(button: button, modifiers: modifiers, app: app) else {

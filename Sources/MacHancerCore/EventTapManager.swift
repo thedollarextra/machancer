@@ -230,14 +230,7 @@ public final class EventTapManager {
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Bool {
         // Never react to the keystrokes we synthesize ourselves.
         guard event.getIntegerValueField(.eventSourceUserData) != ActionDispatcher.syntheticEventUserData
-        else {
-            if DebugLog.isEnabled, type == .otherMouseDown || type == .otherMouseUp {
-                DebugLog.write("saw our own button "
-                               + "\(event.getIntegerValueField(.mouseEventButtonNumber))"
-                               + " \(type == .otherMouseDown ? "down" : "up") — passing it on")
-            }
-            return false
-        }
+        else { return false }
 
         if type == .keyDown || type == .keyUp {
             return handleKey(type: type, event: event)
@@ -246,14 +239,17 @@ public final class EventTapManager {
         // Someone else's drag. Feed it to any gesture that opted to survive one, and
         // always pass it through — suppressing it would break the drag underneath.
         if type == .leftMouseDragged || type == .rightMouseDragged {
-            engine.handleForeignDrag(at: event.location)
+            // Cheapest possible exit for the overwhelmingly common case: somebody is
+            // dragging a window and none of our buttons are held. Tested before reading
+            // `event.location`, which is a CoreGraphics call this path would otherwise
+            // pay ~120 times a second for every drag on the system.
+            if engine.hasActiveGestures { engine.handleForeignDrag(at: event.location) }
             return false
         }
 
         // Scrolling never reaches the gesture engine: a wheel notch has no press, no
         // release and no button to bind, so it is its own path from here down.
         if type == .scrollWheel {
-            if DebugLog.recordsScroll { logScroll(event) }
             return scroller.handleScroll(event)
         }
 
@@ -276,19 +272,6 @@ public final class EventTapManager {
         return engine.handle(input)
     }
 
-    /// Records one scroll event's shape. Every field that distinguishes a wheel from a
-    /// trackpad, and a raw notch from somebody's smoothing.
-    private func logScroll(_ event: CGEvent) {
-        func i(_ f: CGEventField) -> Int64 { event.getIntegerValueField(f) }
-        func d(_ f: CGEventField) -> Double { event.getDoubleValueField(f) }
-        DebugLog.write(String(
-            format: "scroll cont=%d phase=%d mom=%d count=%d line=%.3f pt=%d fixed=%.3f",
-            i(.scrollWheelEventIsContinuous), i(.scrollWheelEventScrollPhase),
-            i(.scrollWheelEventMomentumPhase), i(.scrollWheelEventScrollCount),
-            d(.scrollWheelEventDeltaAxis1), i(.scrollWheelEventPointDeltaAxis1),
-            d(.scrollWheelEventFixedPtDeltaAxis1)
-        ))
-    }
 
     /// Keyboard keys ride the same gesture engine as mouse buttons, mapped into the
     /// key namespace — which is what gives a bound key double-press and press-&-hold
